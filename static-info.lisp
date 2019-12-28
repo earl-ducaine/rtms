@@ -1,0 +1,7 @@
+;;;-*- Mode:COMMON-LISP; Package:INSTALLER; Distribution-Tape:RESTORE-FILE-2;Official-Title:"Rtms"; Release-Number:"3.0"; Part-Number:"2537112-0001" -*-
+
+
+(DEFPARAMETER *STATIC-INFO*
+  '((OFFICIAL-TITLE "RTMS") (RELEASE-NUMBER "3.0") (PATCH-LEVEL "3.0")
+    (PART-NUMBER "2537112-0001") (LOADING-REFERENCE "2549850-0001")
+    (TIME-TO-MAKE "30 min")))
