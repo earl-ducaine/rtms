@@ -1,21 +1,21 @@
+;;; -*- Mode:Common-Lisp; Package:RTMS; Base:10 -*-
 
-;;; -*- Mode:Common-Lisp; Package:RTMS; Fonts:(*CODE-FONT* *COMMENT-FONT* *STRING-FONT*); Base:10 -*-
 ;;; Copyright (c) by Texas Instruments, Incorporated
 ;;; All rights reserved
 ;;; MACROS
 ;;;
-;;; This file contains the following Explorer extensions to CommonLisp d as Indicated in the June 1985 Explorer Lisp
-;;; Reference
-;;;
-;;; This file comtains the following obsolete functions
+;;; This file contains the following Explorer extensions to CommonLisp
+;;; as Indicated in the June 1985 Explorer Lisp Reference
 ;;;
 ;;; This file contains the following functions which are unknown in CommonLisp
 ;;;
-;;; The following function contains flavor references and thus are incompatable with CommonLisp. Their removal will not
-;;; effect the functionality of RTMS.
-;;;
+;;; The following function contains flavor references and thus are
+;;; incompatable with CommonLisp. Their removal will not effect the
+;;; functionality of RTMS.
+
 
 (defmacro abort-transaction* (&rest ignore)
+  (declare (ignore ignore))
   `(abort-transaction))
 
 (defmacro active-database* ()
@@ -27,48 +27,50 @@
 (defmacro andp (&rest predicates)
   `(and* (quote ,predicates) t))
 
-
 (defmacro attach-relation* (relation-name &rest keyword-list)
   `(attach-relation (quote ,relation-name) (quote ,keyword-list)))
 
 (defmacro average* (relation-name attribute-name &rest keyword-list)
-`(average (quote ,relation-name) (quote ,attribute-name) (quote ,keyword-list)))
+  `(average (quote ,relation-name) (quote ,attribute-name)
+	    (quote ,keyword-list)))
 
 (defmacro begin-transaction* (&rest ignore)
+  (declare (ignore ignore))
   `(begin-transaction))
 
 (defmacro commit-transaction* (transaction &rest keyword-list)
   `(commit-transaction (quote ,transaction) (quote ,keyword-list)))
 
 (defmacro count-rtms* (relation-name attribute-name &rest keyword-list)
-`(count-rtms (quote ,relation-name) (quote ,attribute-name) (quote ,keyword-list)))
+  `(count-rtms (quote ,relation-name) (quote ,attribute-name)
+	       (quote ,keyword-list)))
 
 (defmacro define-attribute* (relation attr-des &rest keyword-list)
-`(define-attribute (quote ,relation) (quote ,attr-des) (quote ,keyword-list)))
+  `(define-attribute (quote ,relation) (quote ,attr-des) (quote ,keyword-list)))
 
 (defmacro defattr* (relation attr-des &rest keyword-list)
-`(define-attribute (quote ,relation) (quote ,attr-des) (quote ,keyword-list)))
+  `(define-attribute (quote ,relation) (quote ,attr-des) (quote ,keyword-list)))
 
 (defmacro defdb* (db-name &rest keyword-list)
-`(define-database (quote ,db-name) (quote ,keyword-list)))
+  `(define-database (quote ,db-name) (quote ,keyword-list)))
 
 (defmacro define-database* (db-name &rest keyword-list)
-`(define-database (quote ,db-name) (quote ,keyword-list)))
+  `(define-database (quote ,db-name) (quote ,keyword-list)))
 
 (defmacro define-domain* (domain-name &rest keyword-list)
- `(define-domain (quote ,domain-name) (quote ,keyword-list)))
+  `(define-domain (quote ,domain-name) (quote ,keyword-list)))
 
 (defmacro defenv* (environment-name &rest keyword-list)
-`(define-environment (quote ,environment-name) (quote ,keyword-list)))
+  `(define-environment (quote ,environment-name) (quote ,keyword-list)))
 
 (defmacro define-environment* (environment-name &rest keyword-list)
-`(define-environment (quote ,environment-name) (quote ,keyword-list)))
+  `(define-environment (quote ,environment-name) (quote ,keyword-list)))
 
 (defmacro define-implementation* (implementation-name &rest keyword-list)
   `(define-implementation (quote ,implementation-name) (quote ,keyword-list)))
 
 (defmacro define-index* (relation &rest keyword-list)
-`(define-index (quote ,relation) (quote ,keyword-list)))
+  `(define-index (quote ,relation) (quote ,keyword-list)))
 
 (defmacro define-storage-structure* (storage-structure-name &rest keyword-list)
   `(define-storage-structure (quote ,storage-structure-name) (quote ,keyword-list)))
@@ -95,10 +97,10 @@
   `(delete-tuples (quote ,relation) (quote ,keyword-list)))
 
 (defmacro destroy-attr* (relation &rest keyword-list)
-`(destroy-attribute (quote ,relation) (quote ,keyword-list)))
+  `(destroy-attribute (quote ,relation) (quote ,keyword-list)))
 
 (defmacro destroy-attribute* (relation &rest keyword-list)
-`(destroy-attribute (quote ,relation) (quote ,keyword-list)))
+  `(destroy-attribute (quote ,relation) (quote ,keyword-list)))
 
 (defmacro destroy-db* (db-name &rest keyword-list)
   `(destroy-database (quote ,db-name) (quote ,keyword-list)))
@@ -128,12 +130,14 @@
   `(destroy-view (quote ,view-name)))
 
 (defmacro describe* (&optional object &rest ignore)
+  (declare (ignore ignore))
   `(help (quote ,object)))
 
 (defmacro detach-relation* (relation-name &rest keyword-list)
   `(detach-relation (quote ,relation-name) (quote ,keyword-list)))
 
 (defmacro end-transaction* (&rest ignore)
+  (declare (ignore ignore))
   `(end-transaction))
 
 (defmacro envstat* ()
@@ -152,6 +156,7 @@
   `(gtp (quote ,items)))
 
 (defmacro help* (&optional object &rest ignore)
+  (declare (ignore ignore))
   `(help (quote ,object)))
 
 (defmacro insert* (relation &rest keyword-list)
@@ -270,7 +275,7 @@
   `(retrieve (quote ,relation-name) (quote ,keyword-list)))
 
 (defmacro rtms-count* (relation-name attribute-name &rest keyword-list)
-`(count-rtms (quote ,relation-name) (quote ,attribute-name) (quote ,keyword-list)))
+  `(count-rtms (quote ,relation-name) (quote ,attribute-name) (quote ,keyword-list)))
 
 (defmacro save-db* (&optional (dbname *active-db*) &rest keyword-list)
   `(save-database (quote ,dbname) (quote ,keyword-list)))

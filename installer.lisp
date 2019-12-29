@@ -1,8 +1,7 @@
-;;; -*- Mode:Common-Lisp; Package:INSTALLER; Fonts:(MEDFNT HL12B); Base:10 -*-
-;;; Copyright (c) 1985, 1986, 1987 Texas Instruments Incorporated.  All Rights Reserved.
+;;; -*- Mode:Common-Lisp; Package:INSTALLER; Base:10 -*-
 
-;;; the above is a temporary file attribute line which is replaced on
-;;; the tape
+;;; Copyright (c) 1985, 1986, 1987 Texas Instruments Incorporated.
+;;; All Rights Reserved.
 
 
 ;;; Restore File for RTMS Source and Object Product

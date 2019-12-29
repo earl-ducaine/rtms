@@ -1,8 +1,8 @@
 ;;;  -*- Mode:Common-Lisp; Base:10 -*-
 
-;;; THIS FILE LOADS THE TRANSLATIONS FOR RTMS, THEN SETS THE SYSTEM
-;;; SOURCE FILE SO IT KNOWS WHERE TO FIND THE INFORMATION ABOUT HOW TO
-;;; BUILD RTMS.
+;;; This file loads the translations for rtms, then sets the system
+;;; source file so it knows where to find the information about how to
+;;; build rtms.
 
 (load "SYS: SITE; RTMS TRANSLATIONS" :verbose nil)
 

@@ -2,7747 +2,6 @@
 ;;; -*- Mode:Common-Lisp; Package:RTMS; Fonts:(*CODE-FONT* *COMMENT-FONT* *STRING-FONT*); Base:10 -*-
 ;;; Copyright (c) by Texas Instruments, Incorporated
 ;;; All rights reserved
-;;; INDEX
-;;;
-;;; This file contains the following Explorer extensions to CommonLisp Standard as Indicated in the June 1985 Explorer Lisp
-;;; Reference
-;;;     errset
-;;;
-;;; The following function contains flavor references and thus are incompatable with CommonLisp. Their removal will not
-;;; effect the functionality of RTMS.
-;;;     index-insert-flavor-hash
-;;;     index-insert-flavor-heap
-;;;     index-insert-flavor-avl
-;;;
-
-(defun define-index (relation-name
-     &rest keyword-list
-     &key &optional name documentation storage-structure key priority
-     &allow-other-keys
-     &aux index-doc index-key index-name index-priority index-type relation-attributes
-     relation-implementation relation-storage-structure temp-relation-name)
-  "Define an index on a relation in the active database.
-
-    RELATION-NAME - Name of the relation on which the index will be defined.
-    NAME - Name of the index to be defined
-    KEY - List of attributes names which form the key of the index.
-    STORAGE-STRUCTURE - The name of a RTMS defined storage structure upon which will be used as the index structure.
-    PRIORITY - A numerical value which determines the order in which RTMS will search multiple indices of a relation
-               for a possible key. The number one receives the highest consideration, if it fails the next index in
-               value is attempted.
-    DOCUMENTATION - A string describing this index."
-  name documentation storage-structure key priority
-  (block define-index
-  (cond (*parameter-checking*
- (if (not (active-database relation-name))
-     (return-from define-index nil))))
-  (if (not (setf relation-name (validate-sym relation-name)))
-      (return-from define-index nil))
-  (setf keyword-list (do ((keyword-list keyword-list (car keyword-list)))
- ((or (null keyword-list)(not (listp (car keyword-list)))) keyword-list)))
-  (setf keyword-list (get-keyword-value-prereq '(name sto key doc priority) keyword-list))
-  (setf index-name (get-keyword-value '(name sto key doc priority) keyword-list)
-index-type (second index-name)
-index-key (convert-attributes (third index-name))
-index-doc (fourth index-name)
-index-priority (fifth index-name)
-index-name (first index-name))
-  (setf temp-relation-name (get-relation relation-name '(attributes implementation-type storage-structure) nil)
-relation-attributes (caadr temp-relation-name)
-relation-implementation (second (second temp-relation-name))
-relation-storage-structure (third (second temp-relation-name))
-temp-relation-name (car temp-relation-name))
-  (cond ((not relation-attributes)
- (cond (*provide-error-messages*
-(format *standard-output* "~%ERROR - The relation ~s does not exist in the ~s database"
-relation-name *active-db*)))
- (return-from define-index nil))
-(t
- (setf relation-name temp-relation-name)))
-  ;;
-  ;;  Determine if there is an index on the current relation with the same name as that requested. If so, it is an error.
-  ;;
-  (cond ((null index-name)
- (setf index-name (string (gensym))))
-(t
- (setf index-name (string-upcase index-name))
- (cond ((setf temp-relation-name (car (qtrieve 'system-index *system-index-attributes*
-         '("RELATION-NAME" "INDEX-NAME") *system-index-key*
-         `(string-equal index-name ,(string-upcase index-name)))))
-(if *provide-error-messages*
-    (format *standard-output*
-    "~%ERROR - An index with the name of ~s has already been defined on the relation ~s"
-    (second temp-relation-name) (first temp-relation-name)))
-(return-from define-index nil)))))
-
-  ;;
-  ;;  Determine if the requested storage structure is defined in the current database
-  ;;
-  (cond ((null index-type)
- (setf index-type "AVL"))
-(t
- (cond ((not (car (qtrieve 'system-storage-structure *system-storage-structure-attributes*
-    '("STORAGE-STRUCTURE-NAME") *system-storage-structure-key*
-    `(string-equal storage-structure-name ,(string-upcase index-type)))))
-(if *provide-error-messages*
-    (format *standard-output* "~%ERROR - ~s is an undefined storage structure in the ~s database"
-    index-type *active-db*))
-(return-from define-index nil)))))
-  ;;
-  ;;  Determine if the priority specified is within acceptable limits
-  ;;
-  (cond ((null index-priority)
- (setf index-priority 2))
-((< index-priority 1)
- (cond (*provide-error-messages*
-(format *standard-output* "~%ERROR - ~s is an illegal value for the value of priority." index-priority)
-(format *standard-output* "~%        Priority must be a positive number.")))
- (return-from define-index nil)))
-  (cond ((null index-key)
- (setf index-key (list (car relation-attributes)))))
-  ;;
-  ;;  Everything seems to be in order proceed
-  ;;
-  (if *provide-status-messages*
-      (format *standard-output* "~%Define index ~s on relation ~s in database ~s"
-      (read-from-string index-name) (read-from-string (string-upcase relation-name))
-      (read-from-string *active-db*)))
-  (if (null (create-index-relation relation-name index-name relation-attributes index-key
-    index-type relation-implementation relation-storage-structure))
-      (return-from define-index nil))
-  ;;
-  ;;  Insert the index tuple into the SYSTEM-INDEX relation
-  ;;
-  (insert 'system-index 'tuples (list (list (string-upcase relation-name) index-name
-      (string-upcase index-type) index-key index-priority index-doc)))
-
-  (if *provide-status-messages*
-      (format *standard-output* "~%Index ~s has been defined on relation ~s in database ~s"
-      (read-from-string index-name)
-      (read-from-string (string-upcase relation-name))
-      (read-from-string *active-db*)))
-  ;;
-  ;;  Create the actual index structure and insert the tuples into it using the new index
-  ;;
-  (return-from define-index index-name)))
-
-(defun create-index-relation (relation-name index-name relation-attributes index-key index-type
-      relation-implementation relation-storage-structure
-      &aux tuples)
-  ;;
-  ;;  Create the structure of the type of the storage structure of the index and insert the tuples into the new index. The DEFREL-sto
-  ;; function will validate the attributes and the key and define the appropriate structure.
-  ;;
-  (cond ((null (errset
- (setf index-key (funcall (find-symbol (concatenate 'string "DEFREL-"
-         (string-upcase index-type)) *pkg-string*)
-    index-name relation-attributes
-    (list 'key (convert-attributes index-key))))
-       nil))
- (if *provide-error-messages*
-     (format *standard-output* "~%ERROR - ~s is an undefined storage structure" index-key))
- (setf index-name nil))
-(t
- (setf tuples (funcall (find-symbol (concatenate 'string "OBTAIN-TUPLES-"
-     (string-upcase relation-storage-structure))
-      *pkg-string*)
-       relation-name))
- (funcall (find-symbol (concatenate 'string "INDEX-INSERT-" (string-upcase relation-implementation)
-      "-" (string-upcase index-type))
-       *pkg-string*)
-  index-name tuples relation-attributes index-key relation-name)))
-  index-name)
-
-(defun obtain-tuples-heap (relation-name)
-  (getp relation-name 'entry-point))
-
-(defun obtain-tuples-hash (relation-name &aux tuple-list)
-  (maphash (function (lambda (key-val tuples)
-       key-val
-       (setf tuple-list (append tuples tuple-list))))
-   (getp relation-name 'entry-point))
-  tuple-list)
-
-(defun obtain-tuples-avl (relation-name)
-  (avl-inorder-traversal (getp relation-name 'entry-point)))
-
-(defun index-insert-flavor-hash (index-name tuples attributes key-list relation-name
-  &aux key hash-relation)
-  attributes relation-name key-list
-  (setf key (project-flavor tuples attributes key-list relation-name)
-hash-relation (getp index-name 'entry-point))
-  (mapcar (function
-    (lambda (tuple keyval)
-      ;;
-      ;;Insert the tuple into the hash table using heap formation for collisions.
-      ;;
-      (puthash keyval (cons tuple (gethash keyval hash-relation)) hash-relation)))
-  tuples key))
-
-
-(defun index-insert-struct-hash (index-name tuples attributes key-list relation-name
-  &aux key hash-relation)
-  attributes relation-name key-list
-  (setf key (project-struct tuples attributes key-list relation-name)
-hash-relation (getp index-name 'entry-point))
-  (mapcar (function
-    (lambda (tuple keyval)
-      ;;
-      ;;Insert the tuple into the hash table using heap formation for collisions.
-      ;;
-      (puthash keyval (cons tuple (gethash keyval hash-relation)) hash-relation)))
-  tuples key))
-
-(defun index-insert-flavor-heap (index-name tuples attributes key-list relation-name)
-  attributes key-list relation-name
-  (putp index-name (nconc (getp index-name 'entry-point) tuples) 'entry-point))
-
-(defun index-insert-struct-heap (index-name tuples attributes key-list relation-name)
-  attributes key-list relation-name
-  (putp index-name (nconc (getp index-name 'entry-point) tuples) 'entry-point))
-
-(defun index-insert-flavor-avl (index-name tuples attributes key-list relation-name
-       &aux domain-list domain-key-list key new-element tree)
-  (setf domain-list (caar (qtrieve 'system-relation *system-relation-attributes* '(domains)
-  *system-relation-key*
-  (list 'string-equal 'relation-name (string-upcase relation-name))))
-domain-key-list (car (project-list (list domain-list) attributes key-list))
-key (project-flavor tuples attributes key-list)
-tree (getp index-name 'entry-point))
-  ;;
-  ;; Insert one tuple at a time into the AVL tree
-  ;;
-  (do ((tuple% tuples (cdr tuple%))
-       (key% key (cdr key%)))
-      ((null tuple%) t)
-    ;;
-    ;;  Form the new element in a form suitable for insertion
-    ;;
-    (setf new-element (cons (list (car tuple%)) (append (list 0) (list nil) (list nil)))
-  tree (insert-avl-flavor new-element tree (car key%) key-list attributes domain-key-list nil
-   index-name)))
-  (putp index-name tree 'entry-point))
-
-(defun index-insert-struct-avl (index-name tuples attributes key-list relation-name
-       &aux domain-list domain-key-list key new-element tree)
-  (setf domain-list (caar (qtrieve 'system-relation *system-relation-attributes* '(domains)
-    *system-relation-key*
-  (list 'string-equal 'relation-name (string-upcase relation-name))))
-domain-key-list (car (project-list (list domain-list) attributes key-list))
-key (project-struct tuples attributes key-list relation-name)
-tree (getp index-name 'entry-point))
-  ;;
-  ;; Insert one tuple at a time into the AVL tree
-  ;;
-  (do ((tuple% tuples (cdr tuple%))
-       (key% key (cdr key%)))
-      ((null tuple%) t)
-    ;;
-    ;;  Form the new element in a form suitable for insertion
-    ;;
-    (setf new-element (cons (list (car tuple%)) (append (list 0) (list nil) (list nil)))
-  tree (insert-avl-struct new-element tree (car key%) key-list attributes domain-key-list nil
-   relation-name)))
-  (putp index-name tree 'entry-point))
-
-(defun index-insert-list-heap (index-name tuples attributes key-list relation-name)
-  relation-name key-list attributes
-  (putp index-name (nconc (getp index-name 'entry-point) tuples) 'entry-point))
-
-(defun index-insert-list-hash (index-name tuples attributes key-list relation-name &aux hash-relation key)
-  relation-name
-  (setf hash-relation (getp index-name 'entry-point)
-key (project-list tuples attributes key-list))
-   (mapcar
-     (function (lambda (tuple keyval)
- ;;
- ;;Here the tuple (val.1 val.2 .......val.n) itself is stored in the the hash table.
- ;;
- (puthash keyval (cons tuple (gethash keyval hash-relation)) hash-relation)))
-     tuples key))
-
-(defun index-insert-list-avl (index-name tuples attributes key-list relation-name
-       &aux domain-list domain-key-list key new-element tree)
-  (setf domain-list (caar (qtrieve 'system-relation *system-relation-attributes* '(domains)
-  *system-relation-key*
-  (list 'string-equal 'relation-name (string-upcase (string relation-name)))))
-domain-key-list (car (project-list (list domain-list) attributes key-list))
-key (project-list tuples attributes key-list)
-tree (getp index-name 'entry-point))
-  ;;
-  ;; Insert one tuple at a time into the AVL tree
-  ;;
-  (do ((tuple% tuples (cdr tuple%))
-       (key% key (cdr key%)))
-      ((null tuple%) t)
-    ;;
-    ;;  Form the new element in a form suitable for insertion
-    ;;
-    (setf new-element (cons (list (car tuple%)) (append (list 0) (list nil) (list nil)))
-  tree (insert-avl-list new-element tree (car key%) key-list attributes domain-key-list nil
-   index-name)))
-  (putp index-name tree 'entry-point))
-
-
-(defun extract-key (relation-name attributes key domains relation-storage-structure where-clause index-name
-    &aux index-key index-list index-type (key-value nil)
-    (string-relation-name (string relation-name)) package-name)
-  ;;
-  ;;  First attempt to obtain a key from the main relation if an index name is not passed
-  ;;
-  (setf package-name (package-name (or (symbol-package relation-name) *pkg-string*)))
-  (cond ((null index-name)
- (setf key-value (funcall (find-symbol (concatenate 'string "EXTRACT-KEY-" relation-storage-structure)
-         *pkg-string*)
-   attributes key domains where-clause package-name)
-       index-type relation-storage-structure
-       index-key key)))
-  ;;
-  ;;  If no key could be obtained attempt to find an index which will do
-  ;;
-  (cond ((and (null key-value) (not (member string-relation-name *system-relations*
-      :test 'string-equal)))
-   (cond ((null index-name)
-(setf index-name relation-name
-      index-list (project-list (process-quick-sort (qtrieve 'system-index
-          *system-index-attributes*
-          *system-index-attributes*
-          *system-index-key*
-          `(string-equal relation-name
-           ,string-relation-name
-           ))
-        '(priority) *system-index-attributes*)
-         *system-index-attributes* '(index-name index-type key))))
-       (t
-(cond ((setf index-list
-     (qtrieve 'system-index *system-index-attributes* '(index-name index-type key)
-       *system-index-key*
-       `(and (string-equal relation-name ,string-relation-name)
-      (string-equal index-name ,(string-upcase index-name)))))
-       (cond ((stringp index-name)
-      (setf relation-name (find-symbol (string-upcase index-name) *pkg-string*))))))))
- (cond (index-list
-(do ((index-list index-list (cdr index-list)))
-    ((or (null index-list) key-value) key-value)
-  (setf key-value (funcall (find-symbol (concatenate 'string "EXTRACT-KEY-"
-            (second (car index-list))) *pkg-string*)
-     attributes (third (car index-list)) domains where-clause
-     package-name)
-index-name (find-symbol (string-upcase (first (car index-list))) *pkg-string*)
-index-type (second (car index-list))
-index-key (third (car index-list))))
-(cond ((and (null index-name)
-    (null key-value))
-       (setf index-name relation-name
-     index-type relation-storage-structure
-     index-key key))))
-       (t
-(setf key-value nil
-      index-name relation-name
-      index-type relation-storage-structure
-      index-key key))))
-((null index-name)
- (setf index-name relation-name)))
-  (values index-name key-value index-type index-key))
-
-(defun modify-index (relation-name index-name
-     &rest keyword-list
-     &key &optional new-name documentation storage-structure key priority
-     &allow-other-keys
-     &aux index-doc index-info index-key index-priority index-type new-index-name
-          relation-attributes relation-implementation relation-key relation-storage-structure
-  temp-relation-name tuples)
-  "Modify an index on a relation in the active database.
-
-    RELATION-NAME - Name of the relation on which the index to be modified is defined
-    INDEX-NAME - Name of the index to be modified
-    NEW-NAME - New name for the specified index
-    KEY - List of attributes names which form the key of the index.
-    STORAGE-STRUCTURE - The name of a RTMS defined storage structure upon which will be used as the index structure.
-    PRIORITY - A numerical value which determines the order in which RTMS will search multiple indices of a relation
-               for a possible key. The number one receives the highest consideration, if it fails the next index in
-               value is attempted.
-    DOCUMENTATION - A string describing this index."
-  new-name documentation storage-structure key priority
-  (block modify-index
-  (cond (*parameter-checking*
- (if (not (active-database relation-name))
-     (return-from modify-index nil))))
-  (if (not (setf relation-name (validate-sym relation-name)))
-      (return-from modify-index nil))
-  (setf keyword-list (do ((keyword-list keyword-list (car keyword-list)))
- ((or (null keyword-list)(not (listp (car keyword-list)))) keyword-list)))
-  (setf index-name (string-upcase index-name))
-  (setf keyword-list (get-keyword-value-prereq '(new sto key doc priority) keyword-list))
-  (setf new-index-name (get-keyword-value '(new sto key doc priority) keyword-list)
-index-type (second new-index-name)
-index-key (third new-index-name)
-index-doc (fourth new-index-name)
-index-priority (fifth new-index-name)
-new-index-name (first new-index-name))
-  ;;
-  ;;  Must determine if the relation upon which the index is requested does indeed exist in the current database.
-  ;; We must also know the attributes which are defined in the relation so that the validity of the key can be verified.
-  ;;
-  (setf temp-relation-name (get-relation relation-name '(attributes implementation-type storage-structure key)
-   nil)
-relation-attributes (caadr temp-relation-name)
-relation-implementation (second (second temp-relation-name))
-relation-storage-structure (third (second temp-relation-name))
-relation-key (fourth (second temp-relation-name))
-temp-relation-name (car temp-relation-name))
-  (cond ((not relation-attributes)
- (cond (*provide-error-messages*
-(format *standard-output* "~%ERROR - The relation ~s does not exist in the ~s database"
-relation-name *active-db*)))
- (return-from modify-index nil))
-(t
- (setf relation-name temp-relation-name)))
-  ;;
-  ;;  Determine if there is an index on the current relation with the same name as that requested. If not, it is an error.
-  ;;
-  (setf index-info (car (funcall (find-symbol (concatenate 'string "RETRIEVE-"
-       *system-relation-base-implementation*
-       "-" *system-relation-storage-structure*)
-        *pkg-string*)
-  'system-index *system-index-attributes* '("INDEX-TYPE" "PRIORITY" "DOC" "KEY")
-  *system-index-key*
-  `(and (string-equal index-name ,index-name)
-        (string-equal relation-name ,(string-upcase relation-name)))
-  nil 'system-index)))
-  (cond ((null index-info)
- (if *provide-error-messages*
-     (format *standard-output* "~%ERROR - An index with the name of ~s has not been defined on the relation ~s"
-      index-name relation-name))
- (return-from modify-index nil)))
-  ;;
-  ;;  Determine if there is an index defined on this relation with the new-index-name already. If so it is an error
-  ;;
-  (cond ((null new-index-name)
- (setf new-index-name index-name))
-(t
- (cond ((caar (funcall (find-symbol (concatenate 'string "RETRIEVE-"
-     *system-relation-base-implementation* "-"
-     *system-relation-storage-structure*) *pkg-string*)
-       'system-index *system-index-attributes* '("INDEX-NAME") *system-index-key*
-       `(and (string-equal index-name ,(string-upcase new-index-name))
-      (string-equal relation-name ,(string-upcase relation-name)))
-       nil 'system-index))
-(if *provide-error-messages*
-    (format *standard-output*
-    "~%ERROR - An index with the name of ~s has already been defined on the relation ~s"
-    new-index-name relation-name))
-(return-from modify-index nil)))))
-  ;;
-  ;;  Determine if the requested storage structure is defined in the current database
-  ;;
-  (cond ((null index-type)
- (setf index-type (first index-info)))
-(t
- (setf index-type (string-upcase index-type))
- (cond ((not (car (qtrieve 'system-storage-structure *system-storage-structure-attributes*
-    '("STORAGE-STRUCTURE-NAME") *system-storage-structure-key*
-    `(string-equal storage-structure-name ,index-type))))
-(if *provide-error-messages*
-    (format *standard-output* "~%ERROR - ~s is an undefined storage structure in the ~s database"
-    index-type *active-db*))
-(return-from modify-index nil)))))
-  ;;
-  ;;  Determine if the priority specified is within acceptable limits
-  ;;
-  (cond ((null index-priority)
- (setf index-priority (second index-info)))
-((< index-priority 1)
- (cond (*provide-error-messages*
-(format *standard-output* "~%ERROR - ~s is an illegal value for the value of priority." index-priority)
-(format *standard-output* "~%        Priority must be a positive number.")))
- (return-from modify-index nil)))
-  (setf index-doc (or index-doc (third index-info)))
-  (setf index-key (or (convert-attributes index-key) (fourth index-info)))
-;
-;  Everything seems to be in order proceed
-;
-  (if *provide-status-messages*
-      (format *standard-output* "~%Modify index ~s on relation ~s in database ~s" (read-from-string index-name)
-      (read-from-string (string-upcase relation-name)) (read-from-string *active-db*)))
-  ;;
-  ;;  Must determine if the index relation needs to be recreated. This is the case if either the key or the
-  ;; storage structure has been modified.
-  ;;
-  (cond ((not (and (equal (fourth index-info) index-key) (string-equal (first index-info) index-type)))
- ;;
- ;;  Create the structure of the type of the storage structure of the index and insert the tuples into the new index.
- ;; The DEFREL-sto function will validate the attributes and the key and define the appropriate structure.
- ;;
- (cond ((null (errset
-(setf index-key (funcall (find-symbol (concatenate 'string "DEFREL-" index-type)
-          *pkg-string*)
-        index-name relation-attributes (list 'key index-key))) nil))
-(if *provide-error-messages*
-     (format *standard-output* "~%ERROR - ~s is an undefined storage structure" index-key))
-(return-from modify-index nil)))
- (setf tuples (funcall (find-symbol (concatenate 'string "OBTAIN-TUPLES-" relation-storage-structure)
-      *pkg-string*)
-       relation-name))
- (funcall (find-symbol (concatenate 'string "INDEX-INSERT-" relation-implementation "-" index-type)
-       *pkg-string*)
-  index-name tuples relation-attributes index-key relation-name)))
-  ;;
-  ;;  The index has been modified now modify the system-index relation to reflect the change.
-  ;;
-  (delete-or-modify 'system-index t
-    `(and (string-equal relation-name ,relation-name) (string-equal index-name ,index-name))
-     '("INDEX-NAME" "INDEX-TYPE" "KEY" "PRIORITY" "DOC")
-     (list (string-upcase new-index-name) (string-upcase index-type) `(quote ,index-key)
-       index-priority index-doc))
-  (if *provide-status-messages*
-      (format *standard-output* "~%Index ~s has been modified on relation ~s in database ~s"
-      (read-from-string index-name) (read-from-string (string-upcase relation-name))
-      (read-from-string *active-db*)))
-  (return-from modify-index new-index-name)))
-
-(defun destroy-index (relation-name index-name
-      &aux status?)
-  "Destroy the specified index which is defined on the specified relation.
-
-   RELATION-NAME - The name of the relation upon which the relation is defined.
-   INDEX-NAME - The name of the index to be deleted."
-  (block destroy-index
-(cond (*parameter-checking*
-       (if (not (active-database index-name))
-   (return-from destroy-index nil))))
-(cond ((not (setf relation-name (validate-sym relation-name)))
-       (return-from destroy-index nil)))
-(cond ((not (setf index-name (validate-sym index-name)))
-       (return-from destroy-index nil)))
-(cond ((not (member  (list (string-upcase relation-name)) (qtrieve 'system-relation
-         *system-relation-attributes*
-         '(relation-name)
-         *system-relation-key* t)
-     :test 'equal))
-      (if *provide-error-messages*
-  (format *standard-output* "~%ERROR - The relation ~s does not exist in the database ~s."
-  relation-name *active-db*))
-      (return-from destroy-index nil)))
-(cond ((not (member (list (string-upcase index-name))
-    (qtrieve 'system-index  *system-index-attributes* '(index-name) *system-index-key*
-      `(string-equal relation-name ,(string-upcase relation-name)))
-    :test 'equal))
-      (if *provide-error-messages*
-  (format *standard-output* "~%ERROR - The index ~s is not defined on relation ~s in database ~s"
-  index-name relation-name *active-db*))
-      (return-from destroy-index nil)))
-(setf status? *provide-status-messages*
-      *provide-status-messages* nil)
-(delete-tuples 'system-index
-       'where `(and (string-equal relation-name ,(string-upcase relation-name))
-     (string-equal index-name ',(string-upcase index-name))))
-(setf *provide-status-messages* status?)
-(putp index-name nil 'entry-point)
-(if *provide-status-messages*
-    (format *standard-output* "~%Destruction of index ~s on relation ~s completed."
-    index-name relation-name))
-(return-from destroy-index index-name)))
-BÄBÄ`BÄ7BÄ	BÄ
-BÄ:\Ä
-BÄ3BÄ7BÄ	BÄ9BÄBÄUBÄBÄ3BÄ:BÄ:\ÄBÄ \ÄBÄéBÄãBÄëBÄ¨†Execute the database calls in a transaction.
-
-   TRANSACTION - Name of the transaction to be commited.
-   DIRECTORY   - Name of the directory in which this transaction can be found, if not in memory.
-   PATHNAME    - Name of the file in which it can be found.ÄÄBÄ]—BÄí—BÄAë\ÄBÄOBÄ¿BÄ“BÄc“BÄÈ“BÄ“\ÄBÄ9BÄ¿BÄj“BÄ¿BÄó“\ÄBÄ¿BÄC“BÄÓ¿\ÄBÄ9¿BÄ*“BÄ“BÄb“√ÇRTMS-READ-INSERT-FILEÄ“BÄ“BÄ+“¨ê~%ERROR - The transaction file ~S does not exist; ~@
-                              ~7T the transaction ~S has not been defined yet.Ä¿BÄæ“BÄ°“ÏÉERROR - The transaction file Ä¿BÄ£“BÄ€“,Ç does not exist.¿BÄ¿BÄ¿BÄ@í@‰@QPˇ›A—†ÄÊRÄQˇ›	íÄ¡ÊR@Q¸GSG¡‰LMFL#!C(:HOST "SW-MFG" :BACKUP-DATE 2760540731. :SYSTEM-TYPE :LOGICAL :VERSION 1. :TYPE "XLD" :NAME "INDEX" :DIRECTORY ("RTMS-DIR") :SOURCE-PATTERN "( :DIRECTORY (\"RTMS-DIR\") :NAME :WILD :TYPE :WILD :VERSION :NEWEST)" :NOT-BACKED-UP T :CREATION-DATE 2760360074. :AUTHOR "REL3" :LENGTH-IN-BYTES 6626. :LENGTH-IN-BLOCKS 13. :BYTE-SIZE 16.) pp2Ä\Ä©ÅCOMPILE-DATA\ÄÏÄSW-MFG,ÅGODZILLAÜÄá§öŒFÄFÄ\Äp¿,ÅCOMPILER,ÅVERSIONÄ\ÄFÄFÄp¿BÄ),ÇOPTIMIZE-SWITCHÄÜÄ©ÉQFASL-SOURCE-FILE-UNIQUE-IDÄ1Ä\Äp¿lÄFSÏÇMAKE-FASLOAD-PATHNAMEÄ\ÄÍÄQUOTEÄBÄ$\ÄBÄ8™ÄNILÄ\ÄBÄ8\Ä¨ÄRTMS\ÄBÄ8ÏÄINDEXÄ\ÄBÄ8¨ÄLISP\ÄBÄ8FÄ©ÄBASEFÄ
-ÈÄFONTSÄ\Ä©Å*CODE-FONT*ÄÈÅ*COMMENT-FONT*ÈÅ*STRING-FONT*Ä)ÅPACKAGEÄ©ÄRTMS©ÄMODE©ÅCOMMON-LISPÄÄÉÅDEFINE-INDEXÄÎÄ8v$ÜÄ‡8@FÄÆ¿$Ä¿BÄ:p¿¨ÄTICLÏÄART-QÄ]ÄFÄÄ:BÄ:BÄ:jÄTÄFÄp¿¨ÄSYSÄlÇDEBUG-INFO-STRUCTÄBÄP\Ä√ÅRELATION-NAMEÄÍÄ&RESTÄÉÅKEYWORD-LIST™Ä&KEYjÅ&OPTIONALÄÉÄNAMEÍÅDOCUMENTATIONÄCÇSTORAGE-STRUCTUREÄÉÄKEYÄÅPRIORITYjÇ&ALLOW-OTHER-KEYSÄBÄ:\ÄBÄbBÄeBÄfBÄgBÄhBÄiCÅINDEX-DOCÄCÅINDEX-KEYÄCÅINDEX-NAME√ÅINDEX-PRIORITYCÅINDEX-TYPEÉÇRELATION-ATTRIBUTESÄÉRELATION-IMPLEMENTATIONÄCÉRELATION-STORAGE-STRUCTURECÇTEMP-RELATION-NAMEBÄb\Ä)ÇMACROS-EXPANDEDÄ\Äp¿BÄ\lÅXR-BQ-LISTÍÄFIRSTÄÍÄFIFTHÄÍÄFOURTHÍÄTHIRDÄÍÄSECOND™ÄPROG™ÄSETFÈÅDOCUMENTATIONÄÏøTDefine an index on a relation in the active database.
-
-    RELATION-NAME - Name of the relation on which the index will be defined.
-    NAME - Name of the index to be defined
-    KEY - List of attributes names which form the key of the index.
-    STORAGE-STRUCTURE - The name of a RTMS defined storage structure upon which will be used as the index structure.
-    PRIORITY - A numerical value which determines the order in which RTMS will search multiple indices of a relation
-               for a possible key. The number one receives the highest consideration, if it fails the next index in
-               value is attempted.
-    DOCUMENTATION - A string describing this index.Ä¿ÜÄê ÄCÉ*PROVIDE-STATUS-MESSAGES*Ä—√É*SYSTEM-STORAGE-STRUCTURE-KEY*—√Ñ*SYSTEM-STORAGE-STRUCTURE-ATTRIBUTES*Ä—CÇ*SYSTEM-INDEX-KEY*—CÉ*SYSTEM-INDEX-ATTRIBUTES*Ä—ÉÅ*ACTIVE-DB*Ä—É*PROVIDE-ERROR-MESSAGES*—ÉÇ*PARAMETER-CHECKING*ë\Ä©ÄNAMEBÄÅiÇSTORAGE-STRUCTUREÄ©ÄKEYÄ)ÅPRIORITY¿p¿BÄ\ÏÅSTORE-KEYARGSÄ“ÇACTIVE-DATABASEÄ“ÉÅVALIDATE-SYM“\ÄBÄeÉÄSTOÄBÄhÉÄDOCÄBÄi¿ÉGET-KEYWORD-VALUE-PREREQ“CÇGET-KEYWORD-VALUEÄ“CÇCONVERT-ATTRIBUTES“\ÄCÅATTRIBUTESÉÇIMPLEMENTATION-TYPEÄBÄg¿ÉÅGET-RELATION“ÍÄTERPRI“ÏÇERROR - The relation Ä¿™ÅWRITE-STRING“ÍÄPRIN1Ä“,É does not exist in the Ä¿lÅ databaseÄ¿ÍÄGENSYM“ÍÄSTRING“ÍÅSTRING-UPCASEÄ“ÉÅSYSTEM-INDEX¿\ÄÏÅRELATION-NAMEÄlÅINDEX-NAME¿™ÅSTRING-EQUAL¿BÄn¿™ÄLIST“ÅQTRIEVEÄ“lÑERROR - An index with the name of ¿lÖ has already been defined on the relation ¿¨ÄAVLÄ¿ÉSYSTEM-STORAGE-STRUCTURE¿\ÄÏÇSTORAGE-STRUCTURE-NAME¿√ÇSTORAGE-STRUCTURE-NAME¿,ÅERROR - ¿lÖ is an undefined storage structure in the ¿,Ü is an illegal value for the value of priority.Ä¿¨Ö        Priority must be a positive number.Ä¿ÏÅDefine index Ä¿*ÇREAD-FROM-STRING“ÏÅ on relation Ä¿ÏÅ in database Ä¿√ÇCREATE-INDEX-RELATIONÄ“√ÄTUPLES¿√ÄINSERT“ÏÄIndex ¿ÏÉ has been defined on relation Ä@‰@QPˇ›A—†‰ÄQàÊRÄQäÄ¡ÊR@Q¸OSO¡‰OSˇ5˙ÁOQ@¡P@Qí@¡P@QíH¡HWJ¡H[äG¡HQBF¡HUBI¡HSH¡ÄQPˇ€öN√	BK¡NQBL¡NUBM¡NSN¡KÊ
-‰ÄPàÄQàPà	PàPàRNQÄ¡HÊÇäH¡¸HQäH¡PP PP!P"PHQä#ö$™BN¡‰
-	‰Ä%PàNWà&PàNSàRJÊ'PJ¡¸(PP)PP!P*PJQä#ö$™Ê
-‰Ä+PàJQà,Pà	PàPàRIÊJI¡¸IQ‰
-
-‰Ä+PàIQà-PàÄ.PàRGÊKS#äG¡‰Ä/PàHQ0äà1PàÄQä0äà2Pà	P0äàÄQHQKQGQJQLQMQJ3∏ÊRP4PÄQäHQJQäGQIQFQ#≤#ä5ò‰Ä6PàHQ0äà7PàÄQä0äà2Pà	P0äàHOÄ√BÄPÄÄBÄæÄÎÄ*nÜÄA–FÄD¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄæ\ÄBÄ`BÄnBÄqBÄmBÄpBÄrBÄsBÄ:\ÄBÄøBÄ:BÄ:BÄ:\ÄBÄv\ÄÄÄp¿BÄTlÇCONDITION-BIND-IFÄp¿BÄTÏÅCONDITION-BINDp¿BÄTÏÇCATCH-CONTINUATION-IFÄp¿BÄTlÇCATCH-CONTINUATIONp¿BÄTÏÄERRSETÄp¿lÄEH¨Ç*CONDITION-HANDLERS*—BÄä—ÉÅ*PKG-STRING*ëp¿,ÄÏÄG3216Ä¿FÄ\¿ÍÄERRORÄ¿p¿BÄ\ÏÅERRSET-HANDLER¿BÄ¶¿,ÅDEFREL-Ä¿BÄß“™ÅCONCATENATEÄ“™ÅFIND-SYMBOLÄ“BÄh¿BÄö“BÄ≠“BÄü“,ÅERROR - ¿BÄ°“BÄ¢“lÑ is an undefined storage structure¿ÏÅOBTAIN-TUPLES-¿ÏÅINDEX-INSERT-Ä¿lÄ-ÄÄPPTP	PPˇ€JCA√PJCB√÷
-PPÑQäöPíC¡ÅQÇQPÉQäíCõÉ√äJ!BJ!Bˇ\¸\ˇÊ‰ÄPàÉQàPàÅ€Å
-PPÜQäöPíC¡ÄQCã@¡
-PPÖQäPÑQä™PíC¡ÅQ@QÇQÉQÄQC©ÅOÄÏBÄæÄÄCÇOBTAIN-TUPLES-HEAPÄÎÄ	FÄ@FÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄÌ\ÄBÄ`BÄ:BÄ:BÄ:ÄÉÅENTRY-POINTÄ¿ÉÄGETPíÄQPîOÄ¯BÄÌÄÄCÇOBTAIN-TUPLES-HASHÄÎÄÜÄ@\FÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄ˘\ÄBÄ`BÄ:\ÄBÄ:BÄ:p¿BÄ\lÇLEX-PARENT-ENV-REGp¿BÄ\ÏÅLEX-ENV-B-REGÄp¿BÄ\ÏÇLEX-CURRENT-VECTOR-REGp¿BÄ\¨ÇLEX-ALL-VECTORS-REGÄCÅTUPLE-LIST\Ä©ÇINTERNAL-FEF-OFFSETS\ÄFÄiÑVARIABLES-USED-IN-LEXICAL-CLOSURES\ÄBÄÄ\ÄFÄFÄ¿\Ä)ÅINTERNALBÄ˘Ä¿BÄˆ¿BÄ˜“*ÅMAPHASHÄíPP”CÄQPíêFOÄBÄ˘ÄÄBÄÄÎÄ
-ÜÄ@åFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄ\ÄÅKEY-VALÄBÄøBÄ:\ÄBÄ:BÄ:BÄ\ÄBÄv\ÄBÄÄiÉLEXICAL-PARENT-DEBUG-INFOÄBÄˇÄp¿BÄ\,Å*APPENDÄíÅQ¿Pí¿¬ˇOÄ)BÄÄÄCÇOBTAIN-TUPLES-AVLÄÄÎÄ
-FÄ@FÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄ*\ÄBÄ`BÄ:BÄ:BÄ:ÄBÄˆ¿BÄ˜“√ÇAVL-INORDER-TRAVERSALÄíÄQPíåOÄ4BÄ*ÄÄÉINDEX-INSERT-FLAVOR-HASHÄÎÄ0ÜÄA`FÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄ5\ÄBÄnBÄøBÄúÅKEY-LISTBÄ`BÄ:\ÄBÄh√ÅHASH-RELATIONÄBÄ:BÄ:BÄ:BÄ:√ÄTUPLEÄ√ÄKEYVAL\ÄBÄv\ÄBÄp¿¨ÄZLCÄ,ÅDO-NAMEDp¿BÄTÏÇINHIBIT-STYLE-WARNINGSBÄÄÄ√ÅPROJECT-FLAVOR“BÄˆ¿BÄ˜“*ÅGETHASHÄ“p¿BÄT,ÅPUTHASHÄíÅQÇQÉQÑQ¢@¡ÄQPíA¡B—ÅQ@QE¡D¡C¡¸CQDSESG¡F¡GQFQGQAQí
-CAQöCC√¡D≈E≈D‰EÍÁBOÄNBÄ5ÄÄÉINDEX-INSERT-STRUCT-HASHÄÎÄ0ÜÄA`FÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄO\ÄBÄnBÄøBÄúBÄ>BÄ`BÄ:\ÄBÄhBÄ@BÄ:BÄ:BÄ:BÄ:BÄABÄB\ÄBÄv\ÄBÄBÄGBÄIBÄÄÄ√ÅPROJECT-STRUCT“BÄˆ¿BÄ˜“BÄK“BÄMíÅQÇQÉQÑQ¢@¡ÄQPíA¡B—ÅQ@QE¡D¡C¡¸CQDSESG¡F¡GQFQGQAQí
-CAQöCC√¡D≈E≈D‰EÍÁBOÄ\BÄOÄÄÉINDEX-INSERT-FLAVOR-HEAPÄÎÄÜÄ@FÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄ]\ÄBÄnBÄøBÄúBÄ>BÄ`BÄ:BÄ:BÄ:ÄBÄˆ¿BÄ˜“p¿BÄ\ÏÄ*NCONC“ÉÄPUTPíÄQÄQPíÅQíPúOÄiBÄ]ÄÄÉINDEX-INSERT-STRUCT-HEAPÄÎÄÜÄ@FÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄj\ÄBÄnBÄøBÄúBÄ>BÄ`BÄ:BÄ:BÄ:ÄBÄˆ¿BÄ˜“BÄg“BÄhíÄQÄQPíÅQíPúOÄsBÄjÄÄÉINDEX-INSERT-FLAVOR-AVLÄÄÎÄQÜÄA\FÄ2¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄt\ÄBÄnBÄøBÄúBÄ>BÄ`BÄ:\ÄÉÅDOMAIN-LISTÄÇDOMAIN-KEY-LISTÄBÄhÉÅNEW-ELEMENTÄÉÄTREE√ÄTUPLE%ÉÄKEY%\ÄBÄv\ÄBÄBÄÄÄ√Ç*SYSTEM-RELATION-KEY*Ä—ÉÉ*SYSTEM-RELATION-ATTRIBUTES*ëÇSYSTEM-RELATIONÄ¿\ÄÅDOMAINSÄ¿BÄ¨¿BÄ`¿BÄß“BÄ≠“BÄÆ“ÉÅPROJECT-LIST“BÄJ“BÄˆ¿BÄ˜“ÍÄAPPEND“CÇINSERT-AVL-FLAVORÄ“BÄhíPPPPPPÑQ	ä
-ö™B@√
-äÇQÉQöBA¡ÅQÇQÉQöB¡ÄQPíD¡ÅQBQF¡E¡‰ES
-äJ
-äˇ€
-äˇ€
-äö
-CC√DQFSÉQÇQAQˇ€ÄQJ∫D¡E≈F≈EÁÁÄQDQPúOÄéBÄtÄÄÉINDEX-INSERT-STRUCT-AVLÄÄÎÄQÜÄA\FÄ2¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄè\ÄBÄnBÄøBÄúBÄ>BÄ`BÄ:\ÄBÄ~BÄBÄhBÄÄBÄÅBÄÇBÄÉ\ÄBÄv\ÄBÄBÄÄÄBÄÜ—BÄáëBÄà¿\ÄBÄä¿BÄ¨¿BÄ`¿BÄß“BÄ≠“BÄÆ“BÄã“BÄ[“BÄˆ¿BÄ˜“BÄå“CÇINSERT-AVL-STRUCTÄ“BÄhíPPPPPPÑQ	ä
-ö™B@√
-äÇQÉQöBA¡ÅQÇQÉQÑQ¢B¡ÄQPíD¡ÅQBQF¡E¡‰ES
-äJ
-äˇ€
-äˇ€
-äö
-CC√DQFSÉQÇQAQˇ€ÑQJ∫D¡E≈F≈EÁÁÄQDQPúOÄùBÄèÄÄ√ÇINDEX-INSERT-LIST-HEAPÄÎÄÜÄ@FÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄû\ÄBÄnBÄøBÄúBÄ>BÄ`BÄ:BÄ:BÄ:ÄBÄˆ¿BÄ˜“BÄg“BÄhíÄQÄQPíÅQíPúOÄßBÄûÄÄ√ÇINDEX-INSERT-LIST-HASHÄÎÄ0ÜÄA`FÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄ®\ÄBÄnBÄøBÄúBÄ>BÄ`BÄ:\ÄBÄ@BÄhBÄ:BÄ:BÄ:BÄ:BÄABÄB\ÄBÄv\ÄBÄBÄGBÄIBÄÄÄBÄˆ¿BÄ˜“BÄã“BÄK“BÄMíÄQPí@¡ÅQÇQÉQöA¡B—ÅQAQE¡D¡C¡¸CQDSESG¡F¡GQFQGQ@Qí
-C@QöCC√¡D≈E≈D‰EÍÁBOÄ¥BÄ®ÄÄ√ÇINDEX-INSERT-LIST-AVLÄÄÎÄQÜÄA\FÄ2¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄµ\ÄBÄnBÄøBÄúBÄ>BÄ`BÄ:\ÄBÄ~BÄBÄhBÄÄBÄÅBÄÇBÄÉ\ÄBÄv\ÄBÄBÄÄÄBÄÜ—BÄáëBÄà¿\ÄBÄä¿BÄ¨¿BÄ`¿BÄ¶“BÄß“BÄ≠“BÄÆ“BÄã“BÄˆ¿BÄ˜“BÄå“ÇINSERT-AVL-LISTÄ“BÄhíPPPPPPÑQ	ä
-äö™B@√äÇQÉQöBA¡ÅQÇQÉQöB¡ÄQPíD¡ÅQBQF¡E¡‰ESäJäˇ€äˇ€äö
-CC√DQFSÉQÇQAQˇ€ÄQJ∫D¡E≈F≈EÁÁÄQDQPúOÄ√BÄµÄÄÉÅEXTRACT-KEYÄÄÎÄG®ÜÄA‡FÄa¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄƒ\ÄBÄ`BÄúBÄhBÄäBÄsÉÅWHERE-CLAUSEBÄnBÄ:\ÄBÄmCÅINDEX-LISTBÄpCÅKEY-VALUEÄÉÇSTRING-RELATION-NAME™ÅPACKAGE-NAMEBÄ:BÄœ\ÄBÄv\ÄÄzBÄ}BÄ~BÄBÄyBÄÄÄBÄá—BÄà—CÇ*SYSTEM-RELATIONS*—BÄ‹ëBÄ¶“BÄ““BÄ¶¿¨ÅEXTRACT-KEY-¿BÄÂ“BÄÊ“BÄ¨¿p¿BÄ\¨ÅMEMBER-TESTÄ“BÄ®¿BÄ`¿BÄ≠“BÄÆ“\ÄBÄi¿CÇPROCESS-QUICK-SORT“\ÄBÄnBÄpBÄh¿BÄã“™ÄANDÄ¿BÄn¿BÄßíÄQäD¡ÄQùC‚PäE¡ÜÊ	P
-PÑQöPíF¡ÅQÇQÉQÖQEQF´C¡ÑQB¡ÇQ@¡CeÊDQPPò`ÊÜÊÄQÜ¡PPPPPPDQö™PPöPPöA¡¸PPPPPPPDQöPPÜQäöö™A¡1‰Ü7‰ÜQäPíÄ¡A(‰AQG¡¸	P
-PGQ
-BöPíF¡ÅQGQBÉQÖQEQF´C¡GQBäPíÜ¡GQ
-BB¡GQB@¡G≈‰C‡ÂÜÊCÊ¸C€ÄQÜ¡ÑQB¡ÇQ@¡¸ÜÊÄQÜ¡ÜQCQBQ@QÑOÄ›BÄƒÄÄÉÅMODIFY-INDEXÄÎÄL√“ÜÄ‡LÄFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄﬁ\ÄBÄ`BÄnBÄaBÄbBÄcBÄdÅNEW-NAMEBÄfBÄgBÄhBÄiBÄjBÄ:\ÄBÄbBÄÁBÄfBÄgBÄhBÄiBÄlCÅINDEX-INFOBÄmBÄoBÄp√ÅNEW-INDEX-NAMEBÄqBÄrÉÅRELATION-KEYBÄsBÄtBÄøBÄbBÄ:BÄ:BÄ:BÄ:\ÄBÄv\ÄBÄ–BÄ“BÄ‘BÄ÷BÄÿBÄyBÄzBÄ{BÄ|BÄ}BÄ~BÄBÄÄBÄÅÏøtModify an index on a relation in the active database.
-
-    RELATION-NAME - Name of the relation on which the index to be modified is defined
-    INDEX-NAME - Name of the index to be modified
-    NEW-NAME - New name for the specified index
-    KEY - List of attributes names which form the key of the index.
-    STORAGE-STRUCTURE - The name of a RTMS defined storage structure upon which will be used as the index structure.
-    PRIORITY - A numerical value which determines the order in which RTMS will search multiple indices of a relation
-               for a possible key. The number one receives the highest consideration, if it fails the next index in
-               value is attempted.
-    DOCUMENTATION - A string describing this index.Ä¿ÜÄAÄBÄ€—BÄÑ—BÄÖ—BÄÜ—BÄá—BÄà—BÄ‹—ÉÑ*SYSTEM-RELATION-STORAGE-STRUCTURE*Ä—√Ñ*SYSTEM-RELATION-BASE-IMPLEMENTATION*Ä—BÄ —BÄä—BÄãë\Ä)ÅNEW-NAMEBÄÅBÄéBÄèBÄê¿BÄí“BÄì“BÄî“BÄß“\ÄÉÄNEWÄBÄñBÄhBÄóBÄi¿BÄò“BÄô“\ÄBÄúBÄùBÄgBÄh¿BÄû“BÄü“ÏÇERROR - The relation Ä¿BÄ°“BÄ¢“,É does not exist in the Ä¿lÅ databaseÄ¿BÄ¶¿lÅRETRIEVE-Ä¿lÄ-Ä¿BÄÂ“BÄÊ“BÄ®¿\ÄlÅINDEX-TYPE,ÅPRIORITY¨ÄDOCÄ¨ÄKEYÄ¿BÄ‹¿BÄ¨¿BÄn¿BÄ≠“BÄ`¿lÑERROR - An index with the name of ¿ÏÑ has not been defined on the relation ¿\ÄlÅINDEX-NAME¿lÖ has already been defined on the relation ¿BÄ≤¿\ÄÏÇSTORAGE-STRUCTURE-NAME¿BÄµ¿BÄÆ“,ÅERROR - ¿lÖ is an undefined storage structure in the ¿,Ü is an illegal value for the value of priority.Ä¿¨Ö        Priority must be a positive number.Ä¿BÄö“ÏÅModify index Ä¿BÄª“ÏÅ on relation Ä¿ÏÅ in database Ä¿p¿BÄ\ÏÅSTRING-EQUAL*Ä“p¿BÄ›ÏÄG3393Ä¿FÄÀ¿BÄ·¿BÄ„¿,ÅDEFREL-Ä¿BÄh¿lÑ is an undefined storage structure¿ÏÅOBTAIN-TUPLES-¿ÏÅINDEX-INSERT-Ä¿\ÄlÅINDEX-NAMElÅINDEX-TYPE¨ÄKEYÄ,ÅPRIORITY¨ÄDOCÄ¿BÄ8¿ÇDELETE-OR-MODIFY“ÏÄIndex ¿,Ñ has been modified on relation ÄÄ@‰@QPˇ›A—†‰ÄQàÊRÄQäÄ¡ÊR@Q¸RSR¡‰RSˇ5˙ÁRQ@¡ÅQäÅ¡P@Qí@¡P@QíK¡KWJ¡K[H¡KQBF¡KUBI¡KSK¡ÄQPˇ€öP√	BL¡PQBM¡PUBO¡PWBN¡PSP¡LÊ‰ÄPàÄQàPàPàPàRPQÄ¡ P!PP"PP#™
-P$íS¡%P	P&PP'P(P)PÅQ*ö(P+PÄQä*ö*öˇ€%PJSªBG¡Ê	‰Ä,PàÅQà-PàÄQàRKÊÅQK¡+¸ P!PP"PP#™
-P$íS¡%P	P.PP'P(P)PKQä*ö(P+PÄQä*ö*öˇ€%PJSª‰	‰Ä,PàKQà/PàÄQàRJÊGSJ¡¸JQäJ¡0PP1PP(P2PJQ*ö3™Ê‰Ä4PàJQà5PàPàPàRIÊGWI¡¸IQ‰
-‰Ä4PàIQà6PàÄ7PàRFQ‚G[F¡HQ8ä‚GQBH¡‰Ä9PàÅQ:äà;PàÄQä:äà<PàP:äàGQBH+‰GSJQ=êLÊ>P?PT@PAP>Pˇ€JCT√PJCU√÷ PBPJQ#ö
-P$íV¡ÅQLQCPHQ*íVõH√*äJ!BJ!Bˇ\¸\ˇ
-Ê‰Ä4PàHQàDPàR PEPOQ#ö
-P$íV¡ÄQVãQ¡ PFPMQ"PJQ#™
-P$íV¡ÅQQQLQHQÄQV©%Pˇ›'P(P+PÄQ*ö(P)PÅQ*ö*öGPKQäJQäHPHQ*íIQFQ*™I®‰ÄJPàÅQ:äàKPàÄQä:äà<PàP:äàKOÄ!BÄﬁÄÄ√ÅDESTROY-INDEXÄÄÎÄ+8õÜÄ@+ÑFÄc¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄ"\ÄBÄ`BÄnBÄ:\ÄÅSTATUS?Ä\ÄBÄv\ÄBÄyBÄÄBÄÅÏôDestroy the specified index which is defined on the specified relation.
-
-   RELATION-NAME - The name of the relation upon which the relation is defined.
-   INDEX-NAME - The name of the index to be deleted.ÄÄBÄÑ—BÄá—BÄà—BÄ —BÄä—BÄÜ—BÄá—BÄãëBÄì“BÄî“BÄß“BÄ≠“BÄà¿\ÄBÄ`¿BÄÆ“p¿BÄ\¨ÅMEMBER-EQUAL“BÄü“ÏÇERROR - The relation Ä¿BÄ°“BÄ¢“,Ñ does not exist in the database ¿eÄ.¿jÅWRITE-CHAR“BÄ®¿\ÄBÄn¿BÄ¨¿BÄ`¿lÇERROR - The index ¿¨É is not defined on relation ¿ÏÅ in database Ä¿√ÄWHEREÄ¿BÄ‹¿BÄn¿BÄ8¿√ÅDELETE-TUPLESÄ“BÄˆ¿BÄh“ÏÇDestruction of index Ä¿ÏÅ on relation Ä¿¨Å completed.ÄÄ
-‰ÅQàÊRÄQäÄ¡ÊRÅQäÅ¡ÊRÄQääP	PPPˇ›™êÊ‰ÄPàÄQàPàPàPàRÅQääPPPPPPÄQäö™êÊ‰ÄPàÅQàPàÄQà PàPàRP@¡⁄P!P"PPPÄQäöP#P$PÅQäíöö%ò@Q¿ÅQˇ€&P'ò‰Ä(PàÅQà)PàÄQà*PàÅOÄ@BÄ"Ä1Ä\Äp¿BÄ\,ÑFASL-RECORD-FILE-MACROS-EXPANDED\ÄBÄ8\Ä\ÄÍÄDEFUNÄÜÄ'\ÄBÄIÜÄ(Ã¢\ÄBÄGÜÄ*˝j\ÄBÄÿÜÄ-i\ÄBÄ÷ÜÄ~…z\ÄBÄ‘ÜÄ<pë\ÄBÄ“ÜÄ`sN\ÄBÄ–ÜÄ|ƒÙ\ÄBÄÄÜÄ[ÊÑ\ÄBÄÜÄ=Ã#\ÄBÄ~ÜÄ{öÕ\ÄBÄ}ÜÄ:}n\ÄBÄ|ÜÄxıø\ÄBÄ{ÜÄZiÛ\ÄBÄzÜÄz(á\ÄBÄyÜÄ.ŸãÄÄ (package-name (or (symbol-package relation-name) *pkg-strinLMFL#!C(:HOST "SW-MFG" :BACKUP-DATE 2760540734. :SYSTEM-TYPE :LOGICAL :VERSION 2. :TYPE "LISP" :NAME "INSERT" :DIRECTORY ("RTMS-DIR") :SOURCE-PATTERN "( :DIRECTORY (\"RTMS-DIR\") :NAME :WILD :TYPE :WILD :VERSION :NEWEST)" :CHARACTERS T :NOT-BACKED-UP T :CREATION-DATE 2755196698. :AUTHOR "REL3" :LENGTH-IN-BYTES 19826. :LENGTH-IN-BLOCKS 20. :BYTE-SIZE 8.)
-
-;;; -*- Mode:Common-Lisp; Package:RTMS; Fonts:(*CODE-FONT* *COMMENT-FONT* *STRING-FONT*); Base:10 -*-
-;;; Copyright (c) by Texas Instruments, Incorporated
-;;; All rights reserved
-;;; INSERT
-;;;
-;;; This file contains the following Explorer extensions to CommonLisp Standard as Indicated in the June 1985 Explorer Lisp
-;;; Reference
-;;;     firstn
-;;;     deff
-;;;     :string-in
-;;;
-;;; The following function contains flavor references and thus are incompatable with CommonLisp. Their removal will not
-;;; effect the functionality of RTMS.
-;;;     insert-flavor-hash
-;;;     insert-flavor-heap
-;;;
-
-;;; Change History --
-;;; 04.20.87 MRR  Removed &optional from INSERT lambda list.
-
-
-(defun rtms-read-insert-file (pathname
-      &aux (beg-index 0) end-index index value (extend-size 4096) (total-length 0))
-  (setf value (make-array extend-size)
-end-index extend-size)
-  (with-open-file (stream1  pathname)
-    (do ((eof-flag nil))
-(eof-flag t)
-      (multiple-value-setq (index eof-flag)
-(funcall stream1 ':string-in nil value beg-index end-index))
-      (setf total-length (+ total-length index))
-      (cond ((not eof-flag)
-     (setf value (adjust-array value (+ total-length extend-size)))
-     (setf beg-index end-index
-           end-index (+ total-length extend-size))))))
-  (read-from-string value nil nil :start 0 :end total-length))
-
-;************************************************************************
-;           For the sake of old references to this function             *
-;************************************************************************
-(defun insert1 (rel tuples &optional attribute-list)
-  (insert rel (list 'tuples tuples 'attr attribute-list)))
-
-(deff insert-tuples 'insert)
-
-(defun insert (relation-name &rest keyword-list
-       &key tuples attributes pathname
-       &allow-other-keys
-       &aux (attr-val-list nil) (sub-list nil) tuple project-list path attribute-list (key nil) ss imp
-       card qtrieve-var mod-tuples qtrieve-var1 qtrieve-var2 indices)
-  "Insert a list of tuples or data from a file.
-
-   RELATION-NAME   - Name of the relation into which the data is to be inserted.
-   TUPLES     - List of tuples to be inserted. Tuples are expected to be in the list-of-values format.
-   ATTRIBUTES - If the values in the tuples do not correspond to the attribute-list specified during
-                relation-defintion, specify a list of attributes to determine the order.
-   PATHNAME   - If the data is in a file, specify the name of the file."
-   tuples attributes pathname
-
-  (block insert
-  (setf keyword-list (de-nest-keyword-list keyword-list))
-  (cond (*parameter-checking*
- (if (or (not (active-database)) (null (setf relation-name (validate-sym relation-name))))
-     (return-from insert nil))
- (setf keyword-list (get-keyword-value-prereq '(tuple attr path) keyword-list))))
-  (setf tuple (car (get-keyword-value '(tuple) keyword-list))
-project-list (car (get-keyword-value '(attr) keyword-list))
-path (car (get-keyword-value '(path) keyword-list)))
-  (if (and *parameter-checking* project-list (not (listp project-list)))
-      (setf project-list (list project-list)))
-  (cond ((and *parameter-checking* tuple path)
- (if *provide-error-messages*
-     (format *standard-output* "~%ERROR - List of tuples as well as a pathname provided."))
- (return-from insert nil)))
-  ;;
-  ;;  INSERT has been called by one of the restore operations (LOAD-RELATION) and in reference to one of the system-relations
-  ;; insert the tuples without further processing and return.
-  ;;
-  (if (and *restore-operation* (member (string-upcase relation-name) *system-relations*
-        :test 'string-equal))
-      (return-from insert
-(funcall
-  (find-symbol (concatenate 'string "INSERT-" *system-relation-base-implementation* "-"
-       *system-relation-storage-structure*) *pkg-string*)
-  relation-name
-  (eval (read-from-string (concatenate 'string *pkg-name* "*" (string relation-name)
-         "-ATTRIBUTES*")))
-  tuple
-  (eval (read-from-string (concatenate 'string *pkg-name* "*" (string relation-name) "-KEY*")))
-  relation-name)))
-  ;;
-  ;;  If there multiple indices defined on this relation, the tuples inserted into the base relation must also be inserted into each of the
-  ;; secondary indice relations. Not only do the tuples have to be inserted but the SAME tuples.
-  ;;
-  (cond ((not (member (string relation-name) *system-relations* :test 'string-equal))
- (setf indices (qtrieve 'system-index *system-index-attributes* '("INDEX-NAME" "INDEX-TYPE" "KEY")
- *system-index-key*
- `(string-equal relation-name ,(string relation-name))))))
-  ;;
-  ;;  Obtain some information of the relation into which the tuples will be inserted.
-  ;;
-  (setf qtrieve-var (get-relation relation-name
-   '("ATTRIBUTES" "IMPLEMENTATION-TYPE" "STORAGE-STRUCTURE" "KEY" "CARDINALITY")
-   t))
-  (cond ((null (cadr qtrieve-var))
- (if *provide-error-messages*
-     (format *standard-output* "~%ERROR - Relation ~S is not defined in the database ~S"
-     relation-name *active-db*))
- (return-from insert nil)))
-  (setf relation-name (car qtrieve-var)
-qtrieve-var (cadr qtrieve-var)
-imp (second qtrieve-var)
-ss (third qtrieve-var)
-key (fourth qtrieve-var)
-card (fifth qtrieve-var)
-attribute-list (convert-attributes (first qtrieve-var)))
-  ;;
-  ;;  Validate that the attribues specified in the project list supplied by the user are actually attributes of the
-  ;; relation and place them into the proper form.
-  ;;
-  (if *parameter-checking*
-      (if project-list
-  (setf project-list (mapcar #'(lambda (attr)
-   (if (null (validate-sym attr t))
-       (return-from insert nil)
-       (validate-sym attr t)))
-      project-list)))
-      (setf project-list (convert-attributes project-list)))
-  ;;
-  ;;  If the data is stored in a file, read it into the TUPLE.
-  ;;
-  (cond (path
- (if (probe-file path)
-     (setf tuple (rtms-read-insert-file path))
-     (if *provide-error-messages*
- (format *standard-output* "~%ERROR - File ~S does not exist." path)))))
-  (cond ((null tuple)
- (if *provide-error-messages*
-     (format *standard-output* "~%ERROR - No tuples provided."))
- (return-from insert nil)))
-  ;;
-  ;;  Obtain information about the attributes of the insert relation
-  ;;
-  (if (not (or (member (string relation-name) *system-relations* :test 'string-equal) *restore-operation*
-       (not *validity-checking*)))
-      (setf qtrieve-var
-    (funcall (find-symbol (concatenate 'string "RETRIEVE-" *system-relation-base-implementation* "-"
-         *system-relation-storage-structure*) *pkg-string*)
-     'system-attribute *system-attribute-attributes*
-     '("ATTRIBUTE-NAME" "DOMAIN-FUNCTION" "DEFAULT-VALUE") *system-attribute-key*
-     (list 'string-equal 'relation-name  (string relation-name)) nil 'system-attribute)))
-  ;;
-  ;; Check for various possibilities of INSERT format. First see if tuple is a list of tuples. Store the attribute names
-  ;;
-  (cond ((or (member (string-upcase relation-name) *system-relations* :test 'string-equal) *restore-operation*)
- (setf attr-val-list tuple))
-((null (listp tuple))
- (if *provide-error-messages*
-     (format *standard-output* "~%ERROR - List of tuples not provided."))
- (return-from insert nil))
-;;
-;; Check for form 2 ...Multiple inserts AND the optional attribute list is provided,
-;;
-(project-list
- ;;
- ;; Make sure that all attributes provided are actually the attributes in the relation.
- ;;
- (if *parameter-checking*
-     (mapl (function (lambda (cdr-attr &aux attr)
-       (setf attr (car cdr-attr))
-       (cond ((not (member attr attribute-list :test 'string-equal))
-       (if *provide-error-messages*
-    (format *standard-output*
-     "~%ERROR - ~S is not an attribute in the relation ~S"
-     attr relation-name))
-       (return-from insert nil))
-      ((member attr (cdr cdr-attr) :test 'string-equal)
-       (if *provide-warning-messages*
-    (format *standard-output*
-     "~%WARNING - Attribute ~S has been specified more than once in the attribute list."
-     attr))))))
-   project-list))
- ;;
- ;;  CHeck the length of the tuple provided against the length of the attribute list provided. If they are different in length
- ;; inform the user that RTMS is substituting the default values for the missing attributes.
- ;;
- (mapc
-   (function (lambda (sub-tuple &aux (actual-p-l project-list))
-       (cond
- ((listp sub-tuple)
-  (if (and *parameter-checking* (< (length actual-p-l)(length sub-tuple)))
-      (mapc #'(lambda (attr)
-  (if (not (or (member attr actual-p-l :test 'string-equal)
-        (equal (length actual-p-l) (length sub-tuple))))
-      (setf actual-p-l (append actual-p-l (list attr)))))
-     attribute-list))
-  (if (and *parameter-checking* (> (length actual-p-l)(length sub-tuple)))
-      (progn
- (setf actual-p-l (firstn (length sub-tuple) actual-p-l))
- (if *provide-warning-messages*
-     (format *standard-output*
-      "~%WARNING - The tuple ~S is smaller in length than the attribute-list. The extra attributes will get the default values for this tuple."
-      sub-tuple))))
-  (setf sub-list nil)
-  (mapc
-    (function
-      (lambda (attr &aux test)
- (cond ((member attr actual-p-l :test 'string-equal)
-        (setf sub-list
-       (cons
-         (if (setf test (caar (project-list (list sub-tuple)
-         actual-p-l
-         (list attr))))
-      test
-      (caddr (assoc (string-upcase attr) qtrieve-var
-      :test 'string-equal)))
-            sub-list)))
-       (t
-        (setf sub-list
-       (cons (caddr (assoc (string-upcase attr) qtrieve-var
-      :test 'string-equal))
-      sub-list))))))
-    (reverse attribute-list))
-  (setf attr-val-list (cons sub-list attr-val-list)))
- (t
-  (cond (*provide-warning-messages*
-  (format *standard-output* "~%WARNING - The tuple ~S is not a list."
-   sub-tuple)
-  (format *standard-output* "~%          It will not be inserted.")))))))
-   tuple))
-;;
-;;It is of form 1.
-;;
-(*parameter-checking*
- (mapc
-   (function
-     (lambda (sub-tuple)
-       (cond ((not (listp sub-tuple))
-      (cond (*provide-warning-messages*
-     (format *standard-output* "~%WARNING - The tuple ~S is not a list."
-      sub-tuple)
-     (format *standard-output* "~%          It will not be inserted."))))
-     ((< (length sub-tuple) (length attribute-list))
-      (setf attr-val-list
-    (cons
-      (append sub-tuple
-       (mapcar
-  (function
-    (lambda (attr)
-      (caddr (assoc (string-upcase attr) qtrieve-var
-      :test 'string-equal))))
-  (nthcdr (length sub-tuple) attribute-list)))
-      attr-val-list)))
-     ((> (length sub-tuple) (length attribute-list))
-      (setf attr-val-list (cons (firstn (length attribute-list) sub-tuple) attr-val-list)))
-     (t
-      (setf attr-val-list (cons sub-tuple attr-val-list))))))
-   tuple))
-(t
- (setf attr-val-list tuple)))
-  ;;
-  ;;  Perform validity checking on the tuples to be inserted if some requested
-  ;;
-  (cond ((and *validity-checking* (not (member (string-upcase relation-name) *system-relations*
-         :test 'string-equal))
-      (not *restore-operation*))
- (setf mod-tuples attr-val-list
-       attr-val-list nil
-       qtrieve-var1 nil
-       qtrieve-var2 nil)
- (mapc #'(lambda (attr &aux fun dom)
-     (setf fun (read-from-string
-  (concatenate 'string *pkg-name*
-   (setf dom (cadr (assoc attr qtrieve-var
-            :test 'string-equal))))))
-     (push fun qtrieve-var1)
-     (push dom qtrieve-var2))
- (reverse attribute-list))
- (do ((tuples mod-tuples (cdr tuples)))
-     ((null tuples) t)
-   (if (domain-check attribute-list qtrieve-var1 qtrieve-var2 (car tuples))
-       (setf attr-val-list (cons (car tuples) attr-val-list))
-       (cond (*provide-warning-messages*
-      (format *standard-output* "~%WARNING - ~S is not a valid tuple." (car tuples))
-      (format *standard-output* "~%          It will not be inserted."))))))
-(t
- (setf attr-val-list (reverse attr-val-list))))
-  (if (null attr-val-list)
-      (return-from insert (format *standard-output* "~%ERROR - No valid tuples to be inserted.")))
-  ;;
-  ;;  Perform the actual insertation by calling the low level insert functions. The tuple must be inserted into all of
-  ;; secondary index structures as well as the base relation. The low level accessor functions return a list of the tuples
-  ;; which were inserted. Use this list to insert into the index relations.
-  ;;
-  ;;  These insert functions need to be surrounded by a UNWIND-PROTECT. The entry points need to saved else
-  ;; where and restored if there is a problem
-  ;;
-  (setf tuples (funcall (find-symbol (concatenate 'string "INSERT-" imp "-" ss) *pkg-string*)
-(string relation-name) attribute-list attr-val-list key (string relation-name)))
-  (cond (indices
- (mapc (function (lambda (key%)
-   (funcall (find-symbol (concatenate 'string "INDEX-INSERT-" imp "-" (second key%))
-    *pkg-string*)
-     (first key%) tuples attribute-list (third key%) relation-name)))
-       indices)))
-  ;;
-  ;;Reset the modified flag and increment the cardinality.
-  ;;
-  (cond ((not *restore-operation*)
- (delete-or-modify 'system-relation t (list 'string-equal 'relation-name (string-upcase relation-name))
-   '("MODIFIEDP" "CARDINALITY") (list t (+ card (length attr-val-list))))
- (delete-or-modify 'system-relation t (list 'string-equal 'relation-name "SYSTEM-RELATION")
-   '("MODIFIEDP") (list t))
- (if *provide-status-messages*
-     (format *standard-output* "~%~s tuple~:P inserted into the ~s relation"
-     (length attr-val-list) relation-name))
- (return-from insert relation-name))
-(t
- (return-from insert relation-name)))))
-
-(defun insert-flavor-hash (relation-name attr-list tuples key index-name &aux hash-relation)
-  (setf key (project-list tuples attr-list key)
-hash-relation (getp index-name 'entry-point))
-  (setf attr-list (unconvert-attributes attr-list))
-  (setf relation-name (read-from-string (concatenate 'string *pkg-name* (string-upcase relation-name))))
-  (mapcar (function (lambda (tuple keyval &aux %tuple)
-      ;;
-      ;;Insert the tuple into the hash table using heap formation for collissions. Form the instance to be stored in the
-      ;; hash table.
-      ;;
-      (setf %tuple (make-instance relation-name))
-      (do ((tuple tuple (cdr tuple))
-   (attr-list attr-list (cdr attr-list)))
-  ((null tuple) %tuple)
-(set-in-instance %tuple (car attr-list) (car tuple)))
-      (puthash keyval (cons %tuple (gethash keyval hash-relation)) hash-relation)
-      %tuple))
-  tuples key))
-
-(defun insert-flavor-heap (relation-name attr-list tuples key index-name)
-  key attr-list
-  (setf attr-list (unconvert-attributes attr-list))
-  (setf relation-name (read-from-string (concatenate 'string *pkg-name* (string-upcase relation-name))))
-  (let (flavor-tuples (relation-tuples (getp index-name 'entry-point)) (tuples-length (length tuples)))
-    (if (nth tuples-length relation-tuples)
-(putp index-name (append (setf flavor-tuples (mapcar #'(lambda (tuple &aux %tuple)
-      (setf %tuple (make-instance relation-name))
-      (do ((tuple tuple (cdr tuple))
-           (attr-list attr-list (cdr attr-list)))
-          ((null tuple) %tuple)
-        (set-in-instance %tuple (car attr-list)
-           (car tuple))))
-         tuples))
-  (getp index-name 'entry-point))
-      'entry-point)
-(putp index-name (append (getp index-name 'entry-point)
-  (setf flavor-tuples (mapcar #'(lambda (tuple &aux %tuple)
-      (setf %tuple (make-instance relation-name))
-      (do ((tuple tuple (cdr tuple))
-           (attr-list attr-list (cdr attr-list)))
-          ((null tuple) %tuple)
-        (set-in-instance %tuple (car attr-list)
-           (car tuple))))
-         tuples)))
-      'entry-point))
-    flavor-tuples))
-
-(defun insert-list-hash (relation attr-list tuples key index-name &aux hash-relation)
-  relation
-  (setf key (project-list tuples attr-list key)
-hash-relation (getp index-name 'entry-point))
-  (mapc
-    (function (lambda (tuple keyval)
-;;
-;;Here the tuple (val.1 val.2 .......val.n) itself is stored in the the hash table.
-;;
-(puthash keyval (cons tuple (gethash keyval hash-relation)) hash-relation)))
-    tuples key)
-  tuples)
-
-(defun insert-list-heap (relation attr-list tuples key index-name)
-  key attr-list relation
-  (let ((relation-tuples (getp index-name 'entry-point)) (tuples-length (length tuples)))
-     ;; The idea here is that append copies all arguments except the last, therefore for speed reasons the small list should
-     ;; be the first argument to append. Length takes too long so a faster determination of the probable shortest list must be made.
-    (if (nth tuples-length relation-tuples)
-(putp index-name (append tuples relation-tuples) 'entry-point)
-(putp index-name (append relation-tuples tuples) 'entry-point)))
-  tuples)
-
-(defun insert-struct-hash (relation-name attr-list tuples key index-name
-   &aux hash-relation relation-macro (string-relation-name (string relation-name)))
-    (setf key (project-list tuples attr-list key)
-  hash-relation (getp index-name 'entry-point))
-  ;;
-  ;;Instead of calling the project for each tuple after the instance is created we are calling PROJECT-LIST so that we need to call
-  ;; PROJECT only once.
-  ;;
-  (setf relation-macro (read-from-string (concatenate 'string *pkg-name* "MAKE-"
-         string-relation-name)))
-    (setf attr-list
-  (mapcar #'(lambda (attr)
-      (read-from-string (concatenate 'string ":" string-relation-name attr)))
-  attr-list))
-    (mapcar (function (lambda (tuple keyval &aux %tuple attr-val)
-;;
-;;Insert the instance into the hash table
-;;
-(do ((tuple tuple (cdr tuple))
-   (attr-list attr-list (cdr attr-list)))
-  ((null tuple) attr-val)
-(push `(quote ,(car tuple)) attr-val)
-(push (car attr-list) attr-val))
-(setf %tuple (eval `(,relation-macro ,@attr-val)))
-(puthash keyval (cons %tuple (gethash keyval hash-relation)) hash-relation)
-%tuple))
-    tuples key))
-
-(defun insert-struct-heap (relation-name attr-list tuples key index-name
-   &aux relation-macro struct-tuples
-   (string-relation-name (string relation-name)))
-  key attr-list
-  (setf relation-macro (read-from-string (concatenate 'string *pkg-name* "MAKE-"
-         string-relation-name)))
-  (setf attr-list
-(mapcar #'(lambda (attr)
-    (read-from-string (concatenate 'string ":" string-relation-name attr)))
-  attr-list))
-  (setf struct-tuples (mapcar (function (lambda (tuple &aux attr-val)
-    (do ((tuple tuple (cdr tuple))
-         (attr-list attr-list (cdr attr-list)))
-        ((null tuple) attr-val)
-      (push `(quote ,(car tuple)) attr-val)
-      (push (car attr-list) attr-val))
-    (eval `(,relation-macro ,@attr-val))))
-      tuples))
-  (let ((relation-tuples (getp index-name 'entry-point)) (tuples-length (length struct-tuples)))
-     ;; The idea here is that append copies all arguments except the last, therefore for speed reasons the small list should
-     ;; be the first argument to append. Length takes too long so a faster determination of the probable shortest list must be made.
-    (if (nth tuples-length relation-tuples)
-(putp index-name (append struct-tuples relation-tuples) 'entry-point)
-(putp index-name (append relation-tuples struct-tuples) 'entry-point)))
-  struct-tuples)
-E") *system-index-key*
-       `(and (string-equal index-name ,(string-upcase new-index-name))
-      (string-equal relation-name ,(string-upcase relation-name)))
-       nil 'system-index))
-(if *provide-error-messages*
-    (format *standard-output*
-    "~%ERROR - An index with the name of ~s has already been defined on the relation ~s"
-    new-index-name relation-name))
-(return-from modify-index nil)))))
-  ;;
-  ;;  Determine if the requested storage structure is defined in the current database
-  ;;
-  (cond ((null index-type)
- (setf index-type (first index-info)))
-(t
- (setf index-type (string-upcase index-type))
- (LMFL#!C(:HOST "SW-MFG" :BACKUP-DATE 2760540738. :SYSTEM-TYPE :LOGICAL :VERSION 2. :TYPE "XLD" :NAME "INSERT" :DIRECTORY ("RTMS-DIR") :SOURCE-PATTERN "( :DIRECTORY (\"RTMS-DIR\") :NAME :WILD :TYPE :WILD :VERSION :NEWEST)" :NOT-BACKED-UP T :CREATION-DATE 2760360272. :AUTHOR "REL3" :LENGTH-IN-BYTES 4353. :LENGTH-IN-BLOCKS 9. :BYTE-SIZE 16.) pp2Ä\Ä©ÅCOMPILE-DATA\ÄÏÄSW-MFG,ÅGODZILLAÜÄá§`œFÄFÄ\Äp¿,ÅCOMPILER,ÅVERSIONÄ\ÄFÄFÄp¿BÄ),ÇOPTIMIZE-SWITCHÄÜÄ©ÉQFASL-SOURCE-FILE-UNIQUE-IDÄ1Ä\Äp¿lÄFSÏÇMAKE-FASLOAD-PATHNAMEÄ\ÄÍÄQUOTEÄBÄ$\ÄBÄ8™ÄNILÄ\ÄBÄ8\Ä¨ÄRTMS\ÄBÄ8ÏÄINSERT\ÄBÄ8¨ÄLISP\ÄBÄ8FÄ©ÄBASEFÄ
-ÈÄFONTSÄ\Ä©Å*CODE-FONT*ÄÈÅ*COMMENT-FONT*ÈÅ*STRING-FONT*Ä)ÅPACKAGEÄ©ÄRTMS©ÄMODE©ÅCOMMON-LISPÄÄ√ÇRTMS-READ-INSERT-FILEÄÄÎÄ"TÜÄ@`FÄ2¿$Ä¿BÄ:p¿¨ÄTICLÏÄART-QÄ]ÄFÄÄ:BÄ:BÄ:jÄTÄFÄp¿¨ÄSYSÄlÇDEBUG-INFO-STRUCTÄBÄP\Ä*ÅPATHNAMEBÄ:\ÄCÅBEG-INDEXÄCÅEND-INDEXÄ√ÄINDEXÄ√ÄVALUEÄÉÅTOTAL-LENGTHBÄ:p¿BÄ\¨Ç.FILE-ABORTED-FLAG.ÄÅEOF-FLAG\Ä)ÇMACROS-EXPANDEDÄ\Ä™ÄPROG*ÇWITH-OPEN-STREAMÍÅWITH-OPEN-FILE™ÄSETFÄFÄ¿p¿BÄ\lÇSIMPLE-MAKE-ARRAYÄ“ÈÄABORTÄ¿FÄM¿™ÄOPEN“iÅSTRING-INÄ¿FÄê¿™ÅADJUST-ARRAY“p¿BÄTÏÄERRORP“ÈÄCLOSEÄ¿ÈÄSTARTÄ¿©ÄENDÄ¿*ÇREAD-FROM-STRINGí@ﬂDﬂPJíC¡PA¡PF¡ˇ›PJUÄQäE¡¸Pˇ€CQ@QAQ	PEQAG¡B√DaD¡GÊCQDQ`
-íC¡AQ@¡DQ`A¡GÊÂF€]RZ	¸E‰EQàÊPFQEëCQˇ€ˇ€PJPDQJºOÄÄBÄPÄÄÅINSERT1ÄÄÎÄÜÄ$ÄFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄÅ\ÄÉÄRELÄ√ÄTUPLESjÅ&OPTIONALÄ√ÅATTRIBUTE-LISTBÄ:BÄ:BÄ:ÄBÄã¿ÉÄATTR¿™ÄLIST“√ÄINSERTíÄQPÅQPÇQ¢îOÄëBÄÅÄBÄêOÄê√ÅINSERT-TUPLESÄÄBÄêÄÎÄ`FÏÜÄ‡`@FÄ¶¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄê\Ä√ÅRELATION-NAMEÄÍÄ&RESTÄÉÅKEYWORD-LIST™Ä&KEYBÄãCÅATTRIBUTESBÄ`jÇ&ALLOW-OTHER-KEYSÄBÄ:\Ä!BÄùBÄãBÄüBÄ`√ÅATTR-VAL-LISTÄÅSUB-LIST√ÄTUPLEÄÉÅPROJECT-LISTÉÄPATHBÄ
-ÉÄKEYÄCÄSSÉÄIMPÄÉÄCARDÉÅQTRIEVE-VARÄCÅMOD-TUPLESÉÅQTRIEVE-VAR1ÉÅQTRIEVE-VAR2ÅINDICESÄBÄ:BÄ:BÄ:BÄéCÅSUB-TUPLEÄCÅACTUAL-P-LBÄ:ÉÄTESTBÄ:BÄ:ÉÄFUNÄÉÄDOMÄBÄãÉÄKEY%\ÄBÄk\Ä™ÄPUSHBÄmp¿¨ÄZLCÄ,ÅDO-NAMEDp¿BÄTÏÇINHIBIT-STYLE-WARNINGSÍÄFIRSTÄÍÄFIFTHÄÍÄFOURTHÍÄTHIRDÄÍÄSECONDp¿BÄ\lÅXR-BQ-LISTBÄpÈÅDOCUMENTATIONÄ¨ΩInsert a list of tuples or data from a file.
-
-   RELATION-NAME   - Name of the relation into which the data is to be inserted.
-   TUPLES     - List of tuples to be inserted. Tuples are expected to be in the list-of-values format.
-   ATTRIBUTES - If the values in the tuples do not correspond to the attribute-list specified during
-                relation-defintion, specify a list of attributes to determine the order.
-   PATHNAME   - If the data is in a file, specify the name of the file.Ä¿ÜÄ° ÄCÉ*PROVIDE-STATUS-MESSAGES*Ä—CÉ*PROVIDE-WARNING-MESSAGES*—√Ç*SYSTEM-ATTRIBUTE-KEY*—√É*SYSTEM-ATTRIBUTE-ATTRIBUTES*Ä—ÉÇ*VALIDITY-CHECKING*Ä—ÉÅ*ACTIVE-DB*Ä—CÇ*SYSTEM-INDEX-KEY*—CÉ*SYSTEM-INDEX-ATTRIBUTES*Ä—CÅ*PKG-NAME*—ÉÅ*PKG-STRING*—ÉÑ*SYSTEM-RELATION-STORAGE-STRUCTURE*Ä—√Ñ*SYSTEM-RELATION-BASE-IMPLEMENTATION*Ä—CÇ*SYSTEM-RELATIONS*—ÉÇ*RESTORE-OPERATION*Ä—É*PROVIDE-ERROR-MESSAGES*—ÉÇ*PARAMETER-CHECKING*ë\ÄÈÄTUPLESiÅATTRIBUTES)ÅPATHNAME¿p¿BÄ\ÏÅSTORE-KEYARGSÄ“ÉÇDE-NEST-KEYWORD-LIST“ÇACTIVE-DATABASEÄ“ÉÅVALIDATE-SYM“\ÄBÄ§BÄéBÄ¶¿ÉGET-KEYWORD-VALUE-PREREQ“\ÄBÄ§¿CÇGET-KEYWORD-VALUEÄ“\ÄBÄé¿\ÄBÄ¶¿BÄè“ÍÄTERPRI“ÏÜERROR - List of tuples as well as a pathname provided.¿™ÅWRITE-STRING“ÍÅSTRING-UPCASEÄ“™ÅSTRING-EQUAL¿p¿BÄ\¨ÅMEMBER-TESTÄ“ÍÄSTRING¿,ÅINSERT-Ä¿lÄ-Ä¿™ÅCONCATENATEÄ“™ÅFIND-SYMBOLÄ“lÄ*Ä¿BÄÓ“¨Å-ATTRIBUTES*¿BÄ“™ÄEVAL“ÏÄ-KEY*Ä¿ÉÅSYSTEM-INDEX¿\ÄlÅINDEX-NAMElÅINDEX-TYPE¨ÄKEYÄ¿BÄõ¿ÅQTRIEVEÄ“\ÄlÅATTRIBUTES¨ÇIMPLEMENTATION-TYPEÄlÇSTORAGE-STRUCTUREÄ¨ÄKEYÄ¨ÅCARDINALITYÄ¿ÉÅGET-RELATION“lÇERROR - Relation Ä¿ÍÄPRIN1Ä“,Ñ is not defined in the database ¿CÇCONVERT-ATTRIBUTES“jÅPROBE-FILE“BÄP“ÏÅERROR - File Ä¿,Ç does not exist.¿¨ÉERROR - No tuples provided.Ä¿lÅRETRIEVE-Ä¿ÇSYSTEM-ATTRIBUTE¿\ÄÏÅATTRIBUTE-NAME,ÇDOMAIN-FUNCTIONÄÏÅDEFAULT-VALUEÄ¿¨ÑERROR - List of tuples not provided.¿,ÅERROR - ¿ÏÑ is not an attribute in the relation Ä¿¨ÇWARNING - Attribute ¿lá has been specified more than once in the attribute list.Ä¿p¿BÄ\,Å*APPENDÄ“p¿BÄTÏÄFIRSTN“¨ÇWARNING - The tuple ¿,é is smaller in length than the attribute-list. The extra attributes will get the default values for this tuple.Ä¿*ÅREVERSEÄ“BÄ•“p¿BÄ\lÅASSOC-TEST“,Ç is not a list.Ä¿lÑ          It will not be inserted.¿ÉÅDOMAIN-CHECK“lÅWARNING - ¿ÏÇ is not a valid tuple.¿,ÖERROR - No valid tuples to be inserted.Ä¿ÏÅINDEX-INSERT-Ä¿ÇSYSTEM-RELATIONÄ¿\ÄlÅMODIFIEDPÄ¨ÅCARDINALITYÄ¿ÇDELETE-OR-MODIFY“,ÇSYSTEM-RELATIONÄ¿\ÄlÅMODIFIEDPÄ¿ÏÄ tuple¿eÄs¿jÅWRITE-CHAR“¨Ç inserted into the Ä¿lÅ relationÄÄ@‰@QPˇ›A—†@Qä@¡‰Ä‰ÄQäÄ¡ÊRP@Qí@¡P@QíBF¡P@QíBG¡P@QíBH¡‰G‰G5ÊGQäG¡
-‰F‰H‰‰ Ä!P"àR%‰ÄQ#äP$P%ò‰&P'PP(PP)™P*íS¡ÄQ&PP+PÄQ,ä-P)™.ä/äFQ&PP+PÄQ,ä0P)™.ä/äÄQS≠ÄQ,äP$P%òÊ1PP2P
-P$P3PÄQ,äö4™R¡ÄQ5Pˇ›6öN¡NÊ	‰ Ä7P"àÄQ8à9P"à	P8àRNSÄ¡NWN¡NWL¡N[K¡NQBJ¡NUBM¡NS:äI¡‰G‰S€S—GQU¡T¡¸TQUSV√ˇ›êÊRVQˇ›íCT√¡U≈UÁSQ¸GQ:äG¡H‰HQ;à‰HQ<äF¡
-¸‰ Ä=P"àHQ8à>P"àFÊ‰ Ä?P"àRÄQ,äP$P%òÊÊ‰&P@PP(PP)™P*íU¡APPBPP$P3PÄQ,äöˇ€APJUªN¡ÄQ#äP$P%òÏÊÍÊF5Ê‰ ÄCP"àRGô‰&‰GQT¡#‰V€TSV√IQ$P%òÊ	‰ ÄDP"àVQ8àEP"àÄQ8àRVQTU$P%ò	‰‰ ÄFP"àVQ8àGP"àT≈›ÁFQT¡∑‰TSW¡GQX¡W5Y‰1‰GQäCWQäCx‰IQY¡‰YSV√XQ$P%òÊXQäCWQäC|ÊXQVQäHíX¡Y≈ÌÁ‰XQWQäCô‰WQäCXQIíX¡‰ ÄJP"àWQ8àKP"àE€IQLäS¡‰SSV¡Z€VQXQ$P%ò‰WQäXQVQäMöBZ¡‰ZQ¸VQ#äNQ$PNöBE]E¡S≈„ÁEQD]D¡¸
-‰ ÄJP"àWQ8àOP"à ÄPP"àT≈ìÁI¸E‰FQU¡D‰USW¡W5Ê9‰ ÄJP"àWQ8àOP"à ÄPP"à.¸WQäCIQäCx‰WQT€T—WQäCIQ
-C\¡[¡¸[Q\SV√#äNQ$PNöBC[√¡\≈\ÚÁTQHí¸WQIQäCô‰IQäCWQIí¸WQD]D¡U≈øÁ¸FQD¡C‰ÄQ#äP$P%ò=Ê;ÊDQO¡D€P€Q€IQLä[¡‰[SV¡]€^€&PPVQNQ$PNöB^√)ö.ä]√P]P¡^QQ]Q¡[≈ÍÁOQ_¡‰IQPQQQ_SQ†‰_SD]D¡¸
-‰ ÄRP"à_S8àSP"à ÄPP"à_≈ËÁ¸DQLäD¡DÊ ÄTP"àR&P'PLQ(PKQ)™P*í\¡ÄQ,äIQDQJQÄQ,ä\´A¡R‰RQ[¡‰[S`¡&PUPLQ(P`W)™P*íY¡`SAQIQ`[ÄQY©[≈ÌÁ,ÊVPˇ›$P3PÄQ#äöWPˇ›DQäCMaíX®VPˇ›$P3PYPöZPˇ›äX®‰ ÄDQäC8à[P"àDQäCÊ\P]à^P"àÄQ8à_P"àÄOÄ4BÄêÄÄCÇINSERT-FLAVOR-HASHÄÎÄ"TÜÄAhFÄ2¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄ5\ÄBÄõCÅATTR-LISTÄBÄãBÄßCÅINDEX-NAMEBÄ:\Ä
-√ÅHASH-RELATIONÄBÄ:BÄ:BÄ:BÄ:BÄ§√ÄKEYVAL√Ä%TUPLEBÄ§BÄ>\ÄBÄk\ÄBÄmBÄªBÄΩBÄpÄBÄ–ëBÄ•“ÉÅENTRY-POINTÄ¿ÉÄGETP“ÉÇUNCONVERT-ATTRIBUTES“BÄÓ¿BÄÍ“BÄÒ“BÄ“p¿BÄTÏÅMAKE-INSTANCEÄ“p¿BÄT,ÇSET-IN-INSTANCEÄ“*ÅGETHASHÄ“p¿BÄT,ÅPUTHASHÄíÇQÅQÉQöÉ¡ÑQPí@¡ÅQäÅ¡PPÄQ	ä
-öäÄ¡A—ÇQÉQD¡C¡B¡$¸BQCSDSF¡E¡G€ÄQäG¡EQH¡ÅQI¡¸GQISHSòH≈I≈H¯ÁFQGQFQ@Qí
-C@QòGQCB√¡C≈D≈C‰DÿÁAOÄPBÄ5ÄÄCÇINSERT-FLAVOR-HEAPÄÎÄ3uÜÄAlFÄB¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄQ\ÄBÄõBÄ>BÄãBÄßBÄ?BÄ:\Ä√ÅFLAVOR-TUPLESÄÇRELATION-TUPLESÄ√ÅTUPLES-LENGTHÄBÄ:BÄ:BÄ:BÄ§BÄCBÄ§BÄ>BÄ:\ÄBÄk\ÄBÄmBÄªBÄΩBÄpÄBÄ–ëBÄH“BÄÓ¿BÄÍ“BÄÒ“BÄ“BÄF¿BÄG“BÄJ“BÄL“BÄ“ÉÄPUTPíÅQäÅ¡PPÄQäöäÄ¡ÑQ	P
-íÇQäCB¡A¡ÑQBQAQå&‰C—ÇQE¡D¡¸DQESF¡G€ÄQäG¡FQH¡ÅQI¡¸GQISHSòH≈I≈H¯ÁGQCD√¡E≈EÂÁCQ@√ÑQ	P
-í&¸ÑQ	P
-íE€E—ÇQC¡J¡¸JQCSH¡G€ÄQäG¡HQF¡ÅQI¡¸GQISFSòF≈I≈F¯ÁGQCJ√¡C≈CÂÁEQ@√í	Pò@OÄaBÄQÄÄÇINSERT-LIST-HASHÄÎÄ*ÜÄATFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄb\ÄÅRELATIONBÄ>BÄãBÄßBÄ?BÄ:\ÄBÄABÄ:BÄ:BÄ§BÄB\ÄBÄk\ÄBÄmBÄªBÄpÄBÄ•“BÄF¿BÄG“BÄM“BÄOíÇQÅQÉQöÉ¡ÑQPí@¡ÇQÉQB¡A¡¸ASBSD¡C¡DQCQDQ@Qí
-C@QòA≈B≈A‰BÓÁÇOÄoBÄbÄÄÇINSERT-LIST-HEAPÄÎÄÜÄAHFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄp\ÄBÄkBÄ>BÄãBÄßBÄ?BÄ:\ÄBÄ\BÄ]BÄ:ÄBÄF¿BÄG“BÄ“BÄ`íÑQPíÇQäCA¡@¡ÑQAQ@Qå‰ÇQ@Q¸@QÇQíPòÇOÄzBÄpÄÄCÇINSERT-STRUCT-HASHÄÎÄ0rÜÄA|FÄB¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄ{\ÄBÄõBÄ>BÄãBÄßBÄ?BÄ:\ÄBÄA√ÅRELATION-MACROÉÇSTRING-RELATION-NAMEBÄ:BÄ:BÄ:BÄéBÄ:BÄ:BÄ§BÄBBÄCÅATTR-VALBÄ§BÄ>\ÄBÄk\Äp¿BÄ\lÅXR-BQ-CONSBÄƒBÄ∏BÄmBÄªBÄΩBÄpÄBÄ–ëBÄÓ“BÄ•“BÄF¿BÄG“BÄÓ¿ÏÄMAKE-Ä¿BÄÒ“BÄ“lÄ:Ä¿BÄ8¿BÄè“BÄı“BÄM“BÄOíÄQäB¡ÇQÅQÉQöÉ¡ÑQPí@¡PP	PBQ
-¢äA¡C—ÅQE¡D¡¸DQESF¡PPBQFQ
-¢äCD√¡E≈EÒÁCQÅ¡E€E—ÇQÉQC¡H¡G¡*¸GQHSCSJ¡I¡K€L€IQM¡ÅQN¡
-¸PMSíL]L¡NSL]L¡M≈N≈MÙÁAQL]äK¡JQKQJQ@Qí
-C@QòKQCG√¡H≈C≈H‰C“ÁEOÄéBÄ{ÄÄCÇINSERT-STRUCT-HEAPÄÎÄ.mÜÄAxFÄ?¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄè\ÄBÄõBÄ>BÄãBÄßBÄ?BÄ:\ÄBÄÖ√ÅSTRUCT-TUPLESÄBÄÜBÄ:BÄ:BÄ:BÄéBÄ:BÄ§BÄáBÄ§BÄ>BÄ\BÄ]\ÄBÄk\ÄBÄãBÄƒBÄ∏BÄmBÄªBÄΩBÄpÄBÄ–ëBÄÓ“BÄÓ¿ÏÄMAKE-Ä¿BÄÒ“BÄ“lÄ:Ä¿BÄ8¿BÄè“BÄı“BÄF¿BÄG“BÄ“BÄ`íÄQäB¡PPPBQ¢ä@¡C—ÅQE¡D¡¸DQESF¡P	PBQFQ¢äCD√¡E≈EÒÁCQÅ¡E€E—ÇQC¡G¡¸GQCSH¡I€HQJ¡ÅQK¡
-¸
-PJSíI]I¡KSI]I¡J≈K≈JÙÁ@QI]äCG√¡C≈C‚ÁEQA¡ÑQPíAQäCM¡L¡ÑQMQLQå‰AQLQ¸LQAQíPòAOÄûBÄèÄ1Ä\Äp¿BÄ\,ÑFASL-RECORD-FILE-MACROS-EXPANDED\ÄBÄ8\Ä\ÄÍÄDEFUNÄÜÄ'\Äp¿BÄT¨ÄDEFFÜÄb\ÄBÄãÜÄñΩ\ÄBÄƒÜÄ.Ÿã\ÄBÄ¬ÜÄ{öÕ\ÄBÄ¡ÜÄ:}n\ÄBÄ¿ÜÄxıø\ÄBÄøÜÄZiÛ\ÄBÄæÜÄz(á\ÄBÄΩÜÄ(Ã¢\ÄBÄªÜÄ*˝j\ÄBÄ∏ÜÄ•ò\ÄBÄpÜÄ[ÊÑ\ÄBÄoÜÄFö≤\ÄBÄnÜÄ)»‰\ÄBÄmÜÄ=Ã#ÄÄ'(lambda (attr)
-  (if (not (or (member attr actual-p-l :test 'string-equal)
-        (equal (length actual-p-l) (length sub-tuple))))
-      (setf actual-p-l (append actual-p-l (list attr)))))
-     attribute-list))
-  (if (and *parameter-checking* (> (length actual-p-l)(length sub-tuple)))
-      (progn
- (setf actual-p-l (firstn (length sub-tuple) actual-p-l))
- (if *provide-warning-messages*
-     (format *standard-output*
-      "~%WARNING - The tuple ~S is smaller in length than LMFL#!C(:HOST "SW-MFG" :BACKUP-DATE 2760540741. :SYSTEM-TYPE :LOGICAL :VERSION 3. :TYPE "LISP" :NAME "INTERFACE" :DIRECTORY ("RTMS-DIR") :SOURCE-PATTERN "( :DIRECTORY (\"RTMS-DIR\") :NAME :WILD :TYPE :WILD :VERSION :NEWEST)" :CHARACTERS T :NOT-BACKED-UP T :CREATION-DATE 2757594269. :AUTHOR "REL3" :LENGTH-IN-BYTES 131948. :LENGTH-IN-BLOCKS 129. :BYTE-SIZE 8.)
-
-;;; -*- Mode:Common-Lisp; Package:RTMS; Fonts:(WIDER-MEDFNT MEDFNB MEDFNB HL7); Base:10 -*-
-;;; Copyright (c) by Texas Instruments, Incorporated
-;;; All rights reserved
-;**************************************************************************
-;                             USER INTERFACE *
-;      *
-;      *
-; 1. Issues to be considered later.          *
-;   a) Output-window  ----> a specified file.                                      *
-;   b) Parts of output (ex. a relation) to a ZMACS window.                         *
-;   c) Use line area scrolling for interactive maintenance of database.            *
-;      *
-;      *
-;      *
-;      *
-;  AUTHOR                         *
-; CSL                  *
-; Texas Instruments                 *
-; .....                  *
-; Version 0.0                 *
-;**************************************************************************
-;;;Change History
-;;;  03.31.87  MRR  Changed DBMS-RC defflavor to make scroll-bar always appear.
-;;;                 Changed references to XFASL files to XLD for Save-relation command.
-;;;  04.01.87  MRR  Changed DBMS-RC defflavor to prevent pixel overlap of scroll-bar.
-;;;  04.06.87  MRR  Fixed HELP-LINE-AREA-DEL to delete tuples using the display.
-;;;                 Fixed mouse documentation strings for various windows.
-;;;                 Fixed method (DBMS-RC :handle-unknown-input) to call Relation help functions
-;;;                 correctly.
-;;;  04.07.87  MRR  Fixed HELP-LINE-AREA. Made references to w:*remove-typeout-standard-message*
-;;;                 for typeout windows. Fixed HELP-LINE-AREA-MOD for the case when the current
-;;;                 package is not RTMS. (SPR #4197)
-;;;  04.09.87  MRR  Added :sensitive-item-types initialization option to DBMS-RC defflavor so
-;;;                 that only valid types are made mouse-sensitive. (see SPR #1858)
-;;;                 Fixed command for sending display output to file.
-
-;**************************************************************************
-;                          INTERFACE GLOBAL VARIABLES                           *
-;     These global variables are used to hold the latest user-values for the       *
-;     variables in the choose-variables windows associated with various commands.  *
-;**************************************************************************
-(PUTPROP 'display nil 'ucl:items)
-(PUTPROP 'display nil 'ucl:commands-wanting-on)
-(PUTPROP 'command-menu nil 'ucl:items)
-(PUTPROP 'command-menu nil 'ucl:commands-wanting-on)
-(PUTPROP 'system-menu nil 'ucl:items)
-(PUTPROP 'system-menu nil 'ucl:commands-wanting-on)
-;;
-(SETQ rtms:*default-pkg* *PACKAGE*)
-(PKG-GOTO *pkg-string*)
-(UCL:MAKE-SYNONYM '*ui-relation* nil)
-(UCL:MAKE-SYNONYM '*ui-tuples* nil)
-(UCL:MAKE-SYNONYM '*ui-transaction* nil)
-(UCL:MAKE-SYNONYM '*ui-function* nil)
-(UCL:MAKE-SYNONYM '*ui-attributes* nil)
-(UCL:MAKE-SYNONYM '*ui-format* nil)
-(UCL:MAKE-SYNONYM '*ui-file* nil)
-(UCL:MAKE-SYNONYM '*ui-database* *active-db*)
-(UCL:MAKE-SYNONYM '*ui-directory* (STRING-APPEND "SYS:" user-id ";"))  ;mrr 03.31.87
-(UCL:MAKE-SYNONYM '*ui-type* 'xld)     ;mrr 03.31.87
-(UCL:MAKE-SYNONYM '*ui-attr-desc* nil)
-(UCL:MAKE-SYNONYM '*ui-doc* ".....")
-(UCL:MAKE-SYNONYM '*ui-key* nil)
-(UCL:MAKE-SYNONYM '*ui-imp* *system-relation-base-implementation*)
-(UCL:MAKE-SYNONYM '*ui-ss* *system-relation-storage-structure*)
-(UCL:MAKE-SYNONYM '*ui-viewdef* nil)
-(UCL:MAKE-SYNONYM '*ui-where* T)
-(UCL:MAKE-SYNONYM '*ui-values* nil)
-(UCL:MAKE-SYNONYM '*ui-join-into* nil)
-(UCL:MAKE-SYNONYM '*ui-over* T)
-(UCL:MAKE-SYNONYM '*ui-into* nil)
-(UCL:MAKE-SYNONYM '*ui-from* nil)
-(UCL:MAKE-SYNONYM '*ui-wide* nil)
-(UCL:MAKE-SYNONYM '*ui-num* -1)
-(UCL:MAKE-SYNONYM '*ui-sort* nil)
-(UCL:MAKE-SYNONYM '*ui-object* nil)
-(UCL:MAKE-SYNONYM '*ui-rel2* nil)
-
-(defparameter *line-area-documentation*
-      '(:documentation ""
-:mouse-L-1 "To see the entire line."
-:mouse-M-2 "To delete the tuple."
-:mouse-R-1 "To modify the tuple.")
-  "The wholine documentation string when a line is selected.")
-
-(defparameter *dbms-window-wholine-documentation*
-      '(:documentation "Window for database output. Some items are made mouse-sensitive for inspection."
-:mouse-R-1 "RTMS Command Menu"
-:mouse-R-2 "System Menu")
-      "The wholine documentation string when in the RTMS interface output window.")
-
-(defparameter *interaction-wholine-documentation*
-      '(:documentation "This window accepts user input. Input can also be provided through the command menu."
-:mouse-R-1 "RTMS Command Menu"
-:mouse-R-2 "System Menu"))
-(defparameter *attribute-wholine-documentation*
-      '(:mouse-any "To see this ATTRIBUTE's definition." ))
-(defparameter  *dbms-object-wholine-documentation*    ;mrr 04.06.87
-      '(:mouse-any "To see this object's definition." ))
-(defparameter *relation-wholine-documentation* ;mrr 04.06.87
-      '(:documentation ""
-:mouse-L-1 "To see the RELATION definition."
-:mouse-M-1 "To modify the RELATION features."
-:mouse-R-1 "To retrieve this RELATION."))
-(defparameter *database-wholine-documentation*
-      '(:mouse-any "List the relations in this DATABASE, if it is active."))
-
-;**************************************************************************
-;                      FLAVORS AND METHODS   *
-;      *
-;     MENU-PANE  ... Used for the main menu that appears in the interface.         *
-;     DBMS-WINDOW .. The output-window in the interface .. text-scrolling, mouse-  *
-;                    sensitive and line-area-scrolling window.                     *
-;     DBMS-WINDOW-WITH-TYPEOUT .. The actual flavor used for output-window. It is  *
-;                                 the above flavor with typeout-mixin added to it  *
-;                                 such that temporary, unimportant and informatory *
-;                                 messages can be printed on the typeout-window and*
-;                                 it disappears when the user hits any character.  *
-;     INTERACTION-PANE .. The flavor used for interaction. It is basically the     *
-;                         universal command loop typein flavor.                    *
-;     DBMS-RC  ..  Flavor for the entire interface screen. Inclusion of the command*
-;                  loop mixin makes the database interface to run under the        *
-;                  UCL package.              *
-;**************************************************************************
-(DEFFLAVOR MENU-PANE ()
-   (w:menu)
-  (:default-init-plist :command-menu t
-                       :dynamic t))
-(DEFFLAVOR DBMS-WINDOW ()
-   (W:LINE-AREA-TEXT-SCROLL-MIXIN
-    W:FUNCTION-TEXT-SCROLL-WINDOW
-    W:MOUSE-SENSITIVE-TEXT-SCROLL-WINDOW
-    W:MARGIN-REGION-MIXIN
-    W:SCROLL-BAR-MIXIN
-    W:ANY-TYI-MIXIN
-    W:WINDOW))
-(DEFMETHOD (DBMS-WINDOW :line-area-mouse-documentation) ()
-   *line-area-documentation*)
-
-(DEFFLAVOR DBMS-WINDOW-WITH-TYPEOUT ()
-   (W:TEXT-SCROLL-WINDOW-TYPEOUT-MIXIN DBMS-WINDOW)
-  (:DEFAULT-INIT-PLIST :typeout-window '(W:typeout-window
-    :Deexposed-typeout-action
-    (:expose-for-typeout))))
-
-(defmethod (DBMS-WINDOW-WITH-TYPEOUT :who-line-documentation-string) ()        ;mrr 04.06.87
-  (multiple-value-bind
-    (ignore m-s-i-type)
-      (send *output-window* :mouse-sensitive-item w:mouse-x w:mouse-y)
-    (case m-s-i-type
-      (attribute  *attribute-wholine-documentation*)
-      (relation   *relation-wholine-documentation*)
-      (database   *database-wholine-documentation*)
-      (dbms-object *dbms-object-wholine-documentation*)
-      (t *dbms-window-wholine-documentation*))))
-
-(DEFFLAVOR INTERACTION-PANE () (UCL:COMMAND-AND-LISP-TYPEIN-WINDOW
- W:PREEMPTABLE-READ-ANY-TYI-MIXIN))
-(defmethod (INTERACTION-PANE  :who-line-documentation-string) ()
-   *interaction-wholine-documentation*)        ;mrr 04.06.87
-
-(DEFMETHOD (INTERACTION-PANE :before :SELECT) (&rest ignore)
-    (SEND dbms-frame1 :expose))
-(DEFMETHOD (INTERACTION-PANE :after :SELECT) (&rest ignore)
-;  (PKG-GOTO "RTMS")
- )
-
-
-(DEFFLAVOR DBMS-RC () (UCL:COMMAND-LOOP-MIXIN W:STREAM-MIXIN
-       W:INFERIORS-NOT-IN-SELECT-MENU-MIXIN
-       W:BORDERED-CONSTRAINT-FRAME-WITH-SHARED-IO-BUFFER)
-  (:DEFAULT-INIT-PLIST :menu-panes '((s-m-pane system-menu))
-                       :active-command-tables '(dbms-comtab)
-       :all-command-tables '(dbms-comtab)
-       :typein-handler :handle-typein-input
-;The following change is being made to prevent the first character going
-;into the interface buffer.
-;         :io-buffer W:kbd-io-buffer
-       :minimum-width (SEND W:default-screen :width)
-       :minimum-height (SEND W:default-screen :height)
-       :basic-help '(help)
-       :print-function 'new-print
-       :print-results? #'(LAMBDA () T)
-       :panes
-  `((o-pane dbms-window-with-typeout
-     :blinker-p NIL              ;:blink
-     :print-function DBMS-PRINTER
-     :print-function-arg NIL
-     :scroll-bar-side :right
-     :scroll-bar-mode :maximum  ;mrr 03.31.87
-     :borders nil       ;mrr 04.01.87
-     :label ,(LIST :bottom :string "OUTPUT"
-     :font fonts:cptfont)
-     :font-map ,(LIST fonts:cptfontb)
-     :sensitive-item-types ,(list 'relation 'attribute ;mrr 04.09.87
-      'database 'dbms-object))
-    (i-pane interaction-pane
-     :save-bits T
-     :blinker-p :OFF            ;:blink
-     :label ,(LIST :bottom :string "Rtms Interface"
-     :font fonts:medfnt)
-     :borders 1
-     :font-map ,(LIST fonts:medfnb))
-    (s-m-pane menu-pane
-     :font-map ,(LIST fonts:hl12b)
-     :rows 1.
-              :label NIL))
-               :constraints  '((main . ((o-pane i-pane s-m-pane)
-       ((s-m-pane 1 :lines))
-       ((o-pane .8))
-       ((i-pane :even))))))
-  (:INIT-KEYWORDS :TYPEIN-HANDLER :handle-typein-input))
-
-(DEFMETHOD (DBMS-RC :handle-unknown-input) (&AUX item)
-  (case UCL:input-mechanism
-    (UCL:menu (beep))
-    (UCL:key-or-button (BEEP))
-    (UCL:typein (SEND *terminal-io* :send-if-handles :fresh-line)
-    (BEEP)
-    (FORMAT *STANDARD-OUTPUT* " ** ~a"
-    (OR UCL:error-message "Unrecognized input")))
-    (OTHERWISE (IF (LISTP ucl:kbd-input)
-      (CASE (FIRST ucl:kbd-input)
-(:line-area (CASE (FOURTH ucl:kbd-input)
-      (#\mouse-l-1 (HELP-LINE-AREA (CADR ucl:kbd-input)))
-      (#\mouse-r-1 (HELP-LINE-AREA-MOD (CADR ucl:kbd-input)))
-      (#\mouse-m-2 (HELP-LINE-AREA-DEL (CADR ucl:kbd-input)))))
-;I think this help can be made lot faster now that we can recognize the type of
-;the object right away.
-(attribute (HELP-OBJECT (STRING
-   (IF (LISTP (SETQ item (CADR ucl:kbd-input)))
-       (CADR item)
-     item))))
-(database (HELP-OBJECT (STRING
-   (IF (LISTP (SETQ item (CADR ucl:kbd-input)))
-       (CADR item)
-     item))))
-(dbms-object (HELP-OBJECT (STRING
-     (IF (LISTP (SETQ item (CADR ucl:kbd-input)))
-  (CADR item)
-       item))))
-(relation (CASE (FOURTH ucl:kbd-input)
-    (#\mouse-r-1 (retrieve
-    (if (stringp (setq item (CADR ucl:kbd-input)))
-        (read-from-string item) ;mrr 04.06.87
-        item)))
-    (#\mouse-m-1 (HELP-MODIFY
-    (if (stringp (setq item (CADR ucl:kbd-input)))
-        (read-from-string item) ;mrr 04.06.87
-        item)))
-    (otherwise (HELP-OBJECT (STRING
-   (IF (LISTP (SETQ item (CADR ucl:kbd-input)))
-       (CADR item)
-     item))))))
-(OTHERWISE (BEEP)))))))
-
-
-;**************************************************************************
-;                          DEFCOMMANDS FOR ALL DATABASE COMMANDS                   *
-;      *
-;     Each defcommand definition enables individual database commands and a few    *
-;     help commands to become part of the database command table. If the reader    *
-;     is familiar with UCL, the following DEFCOMMAND definitions will be           *
-;     self-explanatory.                      *
-;**************************************************************************
-;**************************************************************************
-;            DEFCOMMAND FOR ACTIVE DATABASE  *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC active-database)()
-            `(:description "Returns the name of the active database. (ACTIVE-DATABASE)"
-      :menus ((command-menu :COLUMN "Other Features"))
-      :documentation "Returns the name of the active database."
-      :keys ((#\SUPER-F #\SUPER-A)))
-  (SEND *output-window* :append-item (FORMAT nil "~S" '(ACTIVE-DATABASE)))
-  (SEND *output-window* :append-item (FORMAT nil "~S" (ACTIVE-DATABASE))))
-;**************************************************************************
-;            DEFCOMMAND FOR ABORT TRANSACTION                                      *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC abort-transaction)()
-            `(:description "Terminates the special transaction processing. (ABORT-TRANSACTION)"
-      :menus ((command-menu :COLUMN "Other Features"))
-      :documentation "Terminates the special transaction processing."
-      :keys ((#\SUPER-T #\SUPER-A)))
-  (SEND *output-window* :append-item (FORMAT nil "~S" '(ABORT-TRANSACTION)))
-  (SEND *output-window* :append-item (FORMAT nil "~S" (ABORT-TRANSACTION))))
-;**************************************************************************
-;            DEFCOMMAND FOR BEGIN TRANSACTION                                      *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC begin-transaction)()
-            `(:description "Begins the special transaction processing. (BEGIN-TRANSACTION)"
-      :menus ((command-menu :COLUMN "Other Features"))
-      :documentation "Begins the special transaction processing."
-      :keys ((#\SUPER-T #\SUPER-B)))
-  (SEND *output-window* :append-item (FORMAT nil "~S" '(BEGIN-TRANSACTION)))
-  (SEND *output-window* :append-item (FORMAT nil "~S" (BEGIN-TRANSACTION))))
-;**************************************************************************
-;            DEFCOMMAND FOR END TRANSACTION  *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC end-transaction)()
-            `(:description "Executes the database calls postponed due to special transaction processing and terminates the transaction.  (END-TRANSACTION)"
-      :menus ((command-menu :COLUMN "Other Features"))
-      :documentation "Executes the database calls postponed due to special transaction processing and terminates the transaction."
-      :keys ((#\SUPER-T #\SUPER-E)))
-  (SEND *output-window* :append-item (FORMAT nil "~S" '(END-TRANSACTION)))
-  (SEND *output-window* :append-item (FORMAT nil "~S" (END-TRANSACTION))))
-;**************************************************************************
-;            DEFCOMMAND FOR ENVIRONMENT STATUS                                     *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC environment-status)()
-            `(:description "Returns the values of the environment variables. (ENVIRONMENT-STATUS)"
-      :menus ((command-menu :COLUMN "Other Features"))
-      :documentation "Returns the values of the environment variables."
-      :keys ((#\SUPER-F #\SUPER-E)))
-  (SEND *output-window* :append-item (FORMAT nil "~S" '(ENVIRONMENT-STATUS)))
-  (ENVIRONMENT-STATUS))
-;**************************************************************************
-;            DEFCOMMAND FOR ATTACH RELATION  *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC attach-relation) (relation att path tup dir doc key
-          imp ss mem &AUX keywords)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'attach-relation)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'attach-relation
-        (ARGLIST 'attach-relation))))
-      :arguments (:user-supplied (:label "Relation Name:"
-    :default nil
-    :type (:documentation
-     "Name of the relation to be attached."
-     :sexp))
-   ,*ucl-attr-desc*
-   ,*ucl-pathname*
-   ,*ucl-format*
-   ,*ucl-dir*
-   ,*ucl-doci*
-   ,*ucl-key*
-    ,*ucl-imp*
-   ,*ucl-sto*
-   (:label "Memory:"
-    :default nil
-    :type (:documentation
-     "If the data is stored in the memory, then give the name of the variable that contains the data."
-     :sexp))
-     :label "Give parameters for ATTACH RELATION:")
-      :menus ((command-menu :COLUMN "Definition"))
-      :documentation "used to attach a relation."
-      :keys (#\SUPER-A))
-  (SEND *output-window* :append-item (FORMAT nil "~S"
-(LIST 'ATTACH-RELATION
-      relation
-      (SETQ keywords
-    (LIST 'format tup 'dir dir 'doc doc 'path path
-  'key key 'imp imp 'sto ss 'att att 'mem mem)))))
-  (ATTACH-RELATION relation keywords))
-;**************************************************************************
-;            DEFCOMMAND FOR RENAME ATTRIBUTE *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC rename-attribute) (relation old-new)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'rename-attribute)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'rename-attribute
-        (ARGLIST 'rename-attribute))))
-      :arguments (:user-supplied (:label "Relation Name:"
-    :default *ui-relation*
-    :type (:documentation
-     "Name of the relation whose attributes are to be renamed."
-     :sexp))
-   (:label "Attributes and their new names:"
-    :default nil
-    :type (:documentation
-     "Specify a list of the attributes and their new names. For ex. (a1 new-a1 a2 new-a2...)"
-     :sexp))
-     :label "Give parameters for RENAME ATTRIBUTE:")
-      :menus ((command-menu :COLUMN "Other Features"))
-      :documentation "used to rename attributes in a relation."
-      :keys ((#\SUPER-R #\SUPER-A)))
-  (SEND *output-window* :append-item (FORMAT nil "~S"
-(APPEND (LIST 'RENAME-ATTRIBUTE
-      relation) old-new)))
-  (EVAL `(RENAME-ATTRIBUTE* ,relation ,@old-new)))
-;**************************************************************************
-;            DEFCOMMAND FOR RENAME RELATION  *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC rename-relation) (old-new)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'rename-relation)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'rename-relation
-        (ARGLIST 'rename-relation))))
-      :arguments (:user-supplied (:label "Relations and their new names:"
-    :default nil
-    :type (:documentation
-     "Specify a list of the relations and their new names. For ex. (rel-1 new-rel-1 rel-2 new-rel-2...)"
-     :sexp))
-     :label "Give parameters for RENAME RELATION:")
-      :menus ((command-menu :COLUMN "Other Features"))
-      :documentation "used to rename relations in the current database."
-      :keys ((#\SUPER-R #\SUPER-R)))
-  (SEND *output-window* :append-item (FORMAT nil "~S"
-(CONS 'RENAME-RELATION
-      old-new)))
-  (EVAL `(RENAME-RELATION* ,@old-new)))
-;**************************************************************************
-;            DEFCOMMAND FOR RENAME DATABASE  *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC rename-database) (old-new)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'rename-database)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'rename-database
-        (ARGLIST 'rename-database))))
-      :arguments (:user-supplied (:label "Databases and their new names:"
-    :default nil
-    :type (:documentation
-     "Specify a list of the databases and their new names. For ex. (db-1 new-db-1 db-2 new-db-2...)"
-     :sexp))
-     :label "Give parameters for RENAME DATABASE:")
-      :menus ((command-menu :COLUMN "Other Features"))
-      :documentation "used to rename databases."
-      :keys ((#\SUPER-R #\HYPER-D)))
-  (SEND *output-window* :append-item (FORMAT nil "~S"
-(CONS 'RENAME-DATABASE
-      old-new)))
-  (EVAL `(RENAME-DATABASE* ,@old-new)))
-;**************************************************************************
-;            DEFCOMMAND FOR DETACH RELATION  *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC detach-relation) (relation path mem disk &AUX keywords)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'detach-relation)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'detach-relation
-        (ARGLIST 'detach-relation))))
-      :arguments (:user-supplied (:label "Relation Name:"
-    :default nil
-    :type (:documentation
-     "Name of the relation to be Detached."
-     :sexp))
-   (:label "Pathname:"
-    :default *ui-file*
-    :type (:documentation
-     "Specify the name of the file where the data is to be stored."
-     :SEXP))
-   (:label "Memory:"
-    :default nil
-    :type (:documentation
-     "If the data is to be in the memory and not save it on the disk, give the name of a variable."
-     :sexp))
-   (:label "Disk:"
-    :default nil
-    :type (:documentation
-     "Indicate if files corresponding to the relation are to be deleted from the disk."
-     :boolean))
-     :label "Give parameters for DETACH RELATION:")
-      :menus ((command-menu :COLUMN "Definition"))
-      :documentation "used to detach a relation."
-      :keys (#\SUPER-D))
-  (SEND *output-window* :append-item (FORMAT nil "~S"
-(LIST 'DETACH-RELATION
-      relation
-      (SETQ keywords
-    (LIST 'path path 'mem mem 'disk disk)))))
-  (DETACH-RELATION relation keywords))
-;**************************************************************************
-;            DEFCOMMAND FOR INSERT TUPLES    *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC insert-tuples) (relation-name list-of-tuples attributes
-   pathname &AUX keywords)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'insert)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'insert
-        (ARGLIST 'insert))))
-      :arguments (:user-supplied (:label "Relation Name:"
-    :default *ui-relation*
-    :type (
-      :documentation "Specify the relation into which the tuples are to be inserted."
-      :sexp))
-   (:label "List of tuples:"
-    :default *ui-tuples*
-       :type (:documentation "Give a list of tuples to be inserted." :SEXP))
-   (:label "Attributes:"
-    :default nil
-    :type (:documentation "If a list of attributes is provided, then values in the tuples are assumed to be in the same order."
-:SEXP))
-   (:label "Pathname:"
-    :default *ui-file*
-    :type (:documentation "If a list of tuples is not provided, then specify the file which contains the data."
-     :SEXP))
- :label "Give parameters for INSERTING TUPLES:")
-      :menus ((command-menu :COLUMN "Definition"))
-      :documentation "Used to insert a list of tuples in a given relation."
-      :keys (#\SUPER-I))
-  (SEND *output-window* :append-item (FORMAT nil "~S"
-        (LIST 'INSERT relation-name (SETQ keywords
-    (LIST 'tuples list-of-tuples
-   'attr attributes
-   'path pathname)))))
-  (INSERT relation-name keywords))
-
-;**************************************************************************
-;                DEFCOMMAND FOR MAPON ALLTUPLES                                    *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC maptuple) (relation dbfunction)
-    `(:description ,(STRING-APPEND (DOCUMENTATION 'maptuple)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'maptuple
-        (ARGLIST
-          'maptuple))))
-      :arguments (:user-supplied (:label "Relation Name:"
-    :default *ui-relation*
-    :type (:documentation
-         "Give the relation to be mapped." :sexp))
-   (:label "Function Definition"
-    :default *ui-function*
-    :type (:documentation
-      "Specify a function definition."
-      :sexp))
-  :label "Map a function on all tuples using MAPCAR:")
-      :menus ((command-menu :COLUMN "Other Features"))
-      :documentation "Maps a given function on all the tuples in a relation using MAPCAR."
-      :keys ((#\SUPER-F #\SUPER-M)))
-  (SEND *output-window*
-:append-item
-(FORMAT nil "~S"
-(LIST 'MAPTUPLE dbfunction relation)))
-  (MAPTUPLE (EVAL dbfunction) relation))
-;**************************************************************************
-;                DEFCOMMAND FOR MAPON ALLTUPLES                                    *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC mapt) (relation dbfunction)
-    `(:description ,(STRING-APPEND (DOCUMENTATION 'mapt)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'mapt
-        (ARGLIST
-          'mapt))))
-      :arguments (:user-supplied (:label "Relation Name:"
-    :default *ui-relation*
-    :type (:documentation
-         "Give the relation to be mapped." :sexp))
-   (:label "Function Definition"
-    :default *ui-function*
-    :type (:documentation
-      "Specify a function definition."
-      :sexp))
-  :label "Map a function on all tuples using MAPC:")
-      :menus ((command-menu :COLUMN "Other Features"))
-      :documentation "Maps a given function on all the tuples in a relation using MAPC."
-      :keys (#\SUPER-HYPER-F))
-  (SEND *output-window*
-:append-item
-(FORMAT nil "~S"
-(LIST 'MAPT dbfunction relation)))
-  (MAPT (EVAL dbfunction) relation))
-;**************************************************************************
-;                    DEFCOMMAND FOR PRINT RELATION                                 *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC print-relation) (relation
-    into dir doc key imp sto
-    qprint to-file sort
-    format wide number print
-    tuples qsort stream unique
-    &AUX keywords)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'print-relation)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'print-relation
-        (ARGLIST
-          'print-relation))))
-      :arguments (:user-supplied ,*ucl-retrieve-rel*
-   ,*ucl-into*
-   ,*ucl-dir*
-   ,*ucl-doco*
-   ,*ucl-key*
-   ,*ucl-imp*
-   ,*ucl-sto*
-   ,*ucl-qprint*
-   ,*ucl-out*
-   ,*ucl-sort*
-   ,*ucl-format*
-   ,*ucl-wide*
-     ,*ucl-num*
-   ,*ucl-print*
-   ,*ucl-tuples*
-   ,*ucl-quick-sort*
-   ,*ucl-stream*
-   ,*ucl-unique*
- :label "Give parameters for PRINT RELATION ==>")
-      :menus ((command-menu :COLUMN "Other Features"))
-      :documentation "Used to print tuples in a relation."
-      :keys ((#\SUPER-F #\SUPER-P)))
-  (SEND *output-window* :append-item
-(FORMAT nil "~S"
-(LIST 'RETRIEVE
-      relation
-      (SETQ keywords
-    (LIST 'dir dir
-   'doc doc
-   'into into
-   'qprint (NOT qprint) 'output-to-file to-file
-   'sort sort 'format format
-   'wide wide 'num number 'key key
-   'print print 'tuples tuples
-   'quick-sort qsort 'stream stream
-   'unique unique 'imp imp 'sto sto)))))
-  (RETRIEVE relation keywords))
-;**************************************************************************
-;                DEFCOMMAND  FOR RESTORE DATABASE                                  *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC load-database) (database directory)
-    `(:description ,(STRING-APPEND (DOCUMENTATION 'load-database)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'load-database
-        (ARGLIST
-          'load-database))))
-      :arguments (:user-supplied (:label "Database Name:"
-    :default *ui-database*
-    :type (
-      :documentation "Name of the database to be loaded."
-      :sexp))
-   (:label "Directory Name:"
-    :default *ui-directory*
-    :type (
-      :documentation "Name of the directory in which it is stored."
-      :sexp))
- :label "Give parameters for LOAD DATABASE:")
-      :menus ((command-menu :COLUMN "Definition"))
-      :documentation "Used to load database from a given directory."
-      :keys ((#\SUPER-L #\SUPER-D)))
-  (SEND *output-window*
-:append-item
-(FORMAT nil "~S"
-(LIST 'LOAD-DATABASE database (LIST 'dir directory))))
-  (LOAD-DATABASE database (LIST 'dir directory)))
-;**************************************************************************
-;                DEFCOMMAND  FOR RESTORE ENVIRONMENT                               *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC load-environment) (environment directory)
-`(:description ,(STRING-APPEND (DOCUMENTATION 'load-environment)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'load-environment
-        (ARGLIST
-          'load-environment))))
-      :arguments (:user-supplied (:label "Environment Name:"
-    :default *ui-database*
-    :type (
-      :documentation "Name of the environment to be loaded."
-      :sexp))
-   (:label "Directory Name:"
-    :default *ui-directory*
-    :type (
-      :documentation "Name of the directory in which it is stored."
-      :sexp))
- :label "Give parameters for LOAD ENVIRONMENT:")
-      :menus ((command-menu :COLUMN "Definition"))
-      :documentation "Used to load environment from a given directory."
-      :keys ((#\SUPER-L #\SUPER-E)))
-  (SEND *output-window*
-:append-item
-(FORMAT nil "~S"
-(LIST 'LOAD-ENVIRONMENT environment (LIST 'dir directory))))
-  (LOAD-ENVIRONMENT environment (LIST 'dir directory)))
-;**************************************************************************
-;                DEFCOMMAND  FOR RESTORE RELATION                                  *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC load-relation) (relation directory)
-    `(:description ,(STRING-APPEND (DOCUMENTATION 'load-relation)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'load-relation
-        (ARGLIST
-          'load-relation))))
-      :arguments (:user-supplied (:label "Relation Name:"
-    :default *ui-relation*
-    :type (
-      :documentation "Name of the relation to be loaded."
-      :sexp))
-   (:label "Directory Name:"
-    :default *ui-directory*
-    :type (
-      :documentation "Name of the directory in which it is saved."
-                :sexp))
-  :label "Give parameters for LOAD RELATION:")
-      :menus ((command-menu :COLUMN "Definition"))
-      :documentation "Used to load a relation from a given directory."
-      :keys ((#\SUPER-L #\SUPER-R)))
-  (SEND *output-window*
-:append-item
-(FORMAT nil "~S"
-(LIST 'LOAD-RELATION relation (LIST 'dir directory))))
-  (LOAD-RELATION relation (LIST 'dir directory)))
-;**************************************************************************
-;                DEFCOMMAND  FOR SAVE DATABASE                                     *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC save-database) (database directory)
-    `(:description ,(STRING-APPEND (DOCUMENTATION 'save-database)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'save-database
-        (ARGLIST
-          'save-database))))
-      :arguments (:user-supplied (:label "Database Name:"
-    :default *ui-database*
-    :type (:documentation
-       "Name of the database to be saved."
-      :sexp))
-   (:label "Directory Name:"
-    :default *ui-directory*
-    :type (:documentation
-      "Name of the directory to write to."
-      :sexp))
-  :label "Give parameters for SAVE DATABASE:")
-      :menus ((command-menu :COLUMN "Other Features"))
-      :documentation "Used to save a database on a given directory."
-      :keys ((#\SUPER-S #\HYPER-D)))
-  (SEND *output-window*
-:append-item
-(FORMAT nil "~S"
-(LIST 'SAVE-DATABASE database (LIST 'dir directory))))
-  (SAVE-DATABASE database (LIST 'dir directory)))
-;**************************************************************************
-;                DEFCOMMAND  FOR SAVE ENVIRONMENT                                  *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC save-environment) (environment directory)
-    `(:description ,(STRING-APPEND (DOCUMENTATION 'save-environment)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'save-environment
-        (ARGLIST
-          'save-environment))))
-      :arguments (:user-supplied (:label "Environment Name:"
-    :default nil
-    :type (:documentation
-       "Name of the environment to be saved."
-      :sexp))
-   (:label "Directory Name:"
-    :default *ui-directory*
-    :type (:documentation
-      "Name of the directory to write to."
-      :sexp))
-  :label "Give parameters for SAVE environment:")
-      :menus ((command-menu :COLUMN "Other Features"))
-      :documentation "Used to save an environment on a given directory."
-      :keys ((#\SUPER-S #\SUPER-E)))
-  (SEND *output-window*
-:append-item
-(FORMAT nil "~S"
-(LIST 'SAVE-ENVIRONMENT environment (LIST 'dir directory))))
-  (SAVE-ENVIRONMENT environment (LIST 'dir directory)))
-;**************************************************************************
-;                DEFCOMMAND  FOR SAVE RELATION                                     *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC save-relation) (relation directory type save
-     &AUX keywords)
-    `(:description ,(STRING-APPEND (DOCUMENTATION 'save-relation)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'save-relation
-        (ARGLIST
-          'save-relation))))
-      :arguments (:user-supplied (:label "Relation Name:"
-    :default *ui-relation*
-    :type (
-      :documentation "Name of the relation to be saved."
-      :sexp))
-   (:label "Directory Name:"
-    :default *ui-directory*
-    :type (
-      :documentation "Name of the directory to write to."
-      :sexp))
-   (:label "Type of SAVE:"
-    :default *ui-type*
-    :type (:documentation "Save type. It can be either XLD or COMMAND." ;mrr 03.31.87
-     :sexp))
-   (:label "Must Save:"
-    :default nil
-    :type (:documentation "Save the relation even if the relation has not been modified." :BOOLEAN))
- :label "Give parameters for SAVE RELATION:")
-      :menus ((command-menu :COLUMN "Other Features"))
-      :documentation "Used to save a relation on a given directory."
-      :keys ((#\SUPER-S #\SUPER-R)))
-  (SEND *output-window*
-:append-item
-(FORMAT nil "~S"
-(LIST 'SAVE-RELATION relation
-      (SETQ keywords (LIST 'type type 'dir directory
-     'save save)))))
-  (SAVE-RELATION relation keywords))
-;**************************************************************************
-;                DEFCOMMAND  FOR SAVE TRANSACTION                                  *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC save-transaction) (transaction directory pathname
-     &AUX keywords)
-    `(:description ,(STRING-APPEND (DOCUMENTATION 'save-transaction)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'save-transaction
-        (ARGLIST
-          'save-transaction))))
-      :arguments (:user-supplied (:label "Transaction Name:"
-    :default *ui-transaction*
-    :type (
-      :documentation "Name of the transaction to be saved."
-      :sexp))
-   (:label "Directory Name:"
-    :default *ui-directory*
-    :type (
-      :documentation "Name of the directory to write to."
-      :sexp))
-   (:label "Pathname:"
-    :default *ui-file*
-    :type (:documentation
-     "The name of the file into which the transaction forms will be stored. It defaults to <transaction>.lisp"
-     :SEXP))
- :label "Give parameters for SAVE TRANSACTION:")
-      :menus ((command-menu :COLUMN "Other Features"))
-      :documentation "Used to save a transaction on a given directory."
-      :keys ((#\SUPER-S #\SUPER-T)))
-  (SEND *output-window*
-:append-item
-(FORMAT nil "~S"
-(LIST 'SAVE-TRANSACTION transaction
-      (SETQ keywords (LIST 'path pathname 'dir directory)))))
-  (SAVE-TRANSACTION transaction keywords))
-
-;**************************************************************************
-;                DEFCOMMAND  FOR DEFINE IMPLEMENTATION                             *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC define-implementation) (implementation doc
-   &AUX keywords)
-    `(:description ,(STRING-APPEND (DOCUMENTATION 'define-implementation)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'define-implementation
-        (ARGLIST 'define-implementation))))
-      :arguments (:user-supplied (:label "Implementation Name:"
-    :default nil
-    :type (:documentation
-      "Name of the implementation. Implementation-dependent routines are expected to be defined by the user."
-      :sexp))
-   (:label "Documentation:"
-    :default *ui-doc*
-    :type (:documentation
-      "Documentation for the implementation."
-      :string))
-  :label "Give parameters for DEFINE IMPLEMENTATION:")
-      :menus ((command-menu :COLUMN "Definition"))
-      :documentation "Used to define an implementation."
-      :keys ((#\SUPER-D #\SUPER-I)))
-  (SEND *output-window*
-:append-item
-(FORMAT nil "~S"
-(LIST 'DEFINE-IMPLEMENTATION implementation
-      (SETQ keywords (LIST 'doc doc
-     )))))
-  (DEFINE-IMPLEMENTATION implementation keywords))
-;**************************************************************************
-;                DEFCOMMAND  FOR DEFINE INDEX                                      *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC define-index) (relation-name index-name key-attributes storage-structure priority
-  doc &AUX keywords)
-    `(:description ,(STRING-APPEND (DOCUMENTATION 'define-index)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'define-index
-        (ARGLIST 'define-index))))
-      :arguments (:user-supplied (:label "Relation Name:"
-    :default nil
-    :type (:documentation
-      "Name of the relation upon which the index will be defined."
-      :sexp))
-   (:label "Index Name:"
-    :default nil
-    :type (:documentation
-      "Name of the index to be defined."
-      :string))
-   (:label "Key Attributes:"
-    :default nil
-    :type (:documentation
-      "List of attribute names which form the key for this index."
-      :sexp))
-   (:label "Storage Structure:"
-    :default "AVL"
-    :type (:documentation
-      "The storage structure used to define the index."
-      :string))
-   (:label "Priority:"
-    :default 10
-    :type (:documentation
-      "A numerical value which indicates the priority given to this index. 1 is the highest priority."
-      :number))
-   (:label "Documentation:"
-    :default *ui-doc*
-    :type (:documentation
-      "Documentation for the index."
-      :string))
-  :label "Give parameters for DEFINE INDEX:")
-      :menus ((command-menu :COLUMN "Definition"))
-      :documentation "Used to define a secondary index on a relation."
-      :keys ((#\SUPER-D #\HYPER-I)))
-  (SEND *output-window*
-:append-item
-(FORMAT nil "~S"
-(LIST 'DEFINE-INDEX relation-name
-      (SETQ keywords (LIST 'name index-name 'key key-attributes 'sto storage-structure
-     'priority priority 'doc doc
-     )))))
-  (DEFINE-INDEX relation-name keywords))
-;**************************************************************************
-;                DEFCOMMAND  FOR MODIFY INDEX                                      *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC modify-index) (relation-name index-name new-index-name
-  key-attributes storage-structure priority
-  doc &AUX keywords)
-    `(:description ,(STRING-APPEND (DOCUMENTATION 'modify-index)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'modify-index
-        (ARGLIST 'modify-index))))
-      :arguments (:user-supplied (:label "Relation Name:"
-    :default nil
-    :type (:documentation
-      "Name of the relation upon which the index to be modified is defined."
-      :sexp))
-   (:label "Index Name:"
-    :default nil
-    :type (:documentation
-      "Name of the index to be modified."
-      :string))
-   (:label "New Index Name:"
-    :default nil
-    :type (:documentation
-      "New name of the index."
-      :string))
-   (:label "Key Attributes:"
-    :default nil
-    :type (:documentation
-      "List of attribute names which form the key for this index."
-      :sexp))
-   (:label "Storage Structure:"
-    :default nil
-    :type (:documentation
-      "The storage structure used to define the index."
-      :string))
-   (:label "Priority:"
-      :default 10
-    :type (:documentation
-      "A numerical value which indicates the priority given to this index. 1 is the highest priority."
-      :number))
-   (:label "Documentation:"
-    :default *ui-doc*
-    :type (:documentation
-      "Documentation for the index."
-      :string))
-  :label "Give parameters for DEFINE INDEX:")
-      :menus ((command-menu :COLUMN "Manipulation"))
-      :documentation "Used to define a secondary index on a relation."
-      :keys ((#\SUPER-M #\HYPER-I)))
-  (SEND *output-window*
-:append-item
-(FORMAT nil "~S"
-(LIST 'MODIFY-INDEX relation-name index-name
-      (SETQ keywords (LIST 'new-name new-index-name 'key key-attributes 'sto storage-structure
-     'priority priority 'doc doc
-     )))))
-  (MODIFY-INDEX relation-name index-name keywords))
-;**************************************************************************
-;                DEFCOMMAND  FOR DEFINE STORAGE-STRUCTURE                          *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC define-storage-structure) (storage-structure doc
-   &AUX keywords)
-    `(:description ,(STRING-APPEND (DOCUMENTATION 'define-storage-structure)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'define-storage-structure
-        (ARGLIST 'define-storage-structure))))
-      :arguments (:user-supplied (:label "Storage structure name:"
-    :default nil
-    :type (:documentation
-      "Name of the storage structure. Storage-structure-dependent routines are expected to be defined by the user."
-      :sexp))
-   (:label "Documentation:"
-    :default nil
-    :type (:documentation
-      "Documentation for the storage structure."
-      :string))
-  :label "Give parameters for DEFINE STORAGE STRUCTURE:")
-      :menus ((command-menu :COLUMN "Definition"))
-      :documentation "Used to define a storagestructure."
-      :keys ((#\SUPER-D #\SUPER-S)))
-  (SEND *output-window*
-:append-item
-(FORMAT nil "~S"
-(LIST 'DEFINE-STORAGE-STRUCTURE storage-structure
-      (SETQ keywords (LIST 'doc doc
-     )))))
-  (DEFINE-STORAGE-STRUCTURE storage-structure keywords))
-;**************************************************************************
-;                DEFCOMMAND  FOR DEFINE DOMAIN                                     *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC define-domain) (domain def doc format
-   &AUX keywords)
-    `(:description ,(STRING-APPEND (DOCUMENTATION 'define-domain)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'define-domain
-        (ARGLIST 'define-domain))))
-      :arguments (:user-supplied (:label "Domain Name:"
-    :default nil
-    :type (:documentation
-      "Name of the domain. Domain predicate is expected to be defined prior to this."
-      :sexp))
-   (:label "Default value:"
-    :default nil
-    :type (:documentation
-     "Default value for this domain."
-     :sexp))
-   (:label "Documentation:"
-    :default nil
-    :type (:documentation
-      "Documentation for the domain."
-      :string))
-   (:label "Default width :"
-    :default nil
-    :type (:documentation
-      "The default width to be used for this domain."
-      :sexp))
-  :label "Give parameters for DEFINE DOMAIN:")
-      :menus ((command-menu :COLUMN "Definition"))
-      :documentation "Used to define a domain."
-      :keys (#\SUPER-HYPER-D))
-  (SEND *output-window*
-:append-item
-(FORMAT nil "~S"
-(LIST 'DEFINE-DOMAIN domain
-      (SETQ keywords (LIST 'default def
-     'doc doc
-     'format format)))))
-  (DEFINE-DOMAIN domain keywords))
-;**************************************************************************
-;                DEFCOMMAND  FOR MODIFY DOMAIN                                     *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC modify-domain) (domain def doc format
-   &AUX keywords)
-    `(:description ,(STRING-APPEND (DOCUMENTATION 'modify-domain)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'modify-domain
-        (ARGLIST 'modify-domain))))
-      :arguments (:user-supplied (:label "Domain Name:"
-    :default nil
-    :type (:documentation
-      "Name of the domain to be modified."
-      :sexp))
-   (:label "Default value:"
-    :default nil
-    :type (:documentation
-     "New default value for this domain."
-     :sexp))
-   (:label "Documentation:"
-    :default nil
-    :type (:documentation
-      "New documentation for the domain."
-      :string))
-   (:label "Default width :"
-    :default nil
-    :type (:documentation
-      "The new default width to be used for this domain."
-      :sexp))
-  :label "Give parameters for MODIFY DOMAIN:")
-      :menus ((command-menu :COLUMN "Manipulation"))
-      :documentation "Used to modify a domain."
-      :keys ((#\SUPER-M #\SUPER-D)))
-  (SEND *output-window*
-:append-item
-(FORMAT nil "~S"
-  (LIST 'MODIFY-DOMAIN domain
-      (SETQ keywords (LIST 'default def
-     'doc doc
-     'format format)))))
-  (MODIFY-DOMAIN domain keywords))
-;**************************************************************************
-;                DEFCOMMAND  FOR DEFINE TRANSACTION                                *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC define-transaction) (transaction forms dir path
-      &AUX keywords)
-    `(:description ,(STRING-APPEND (DOCUMENTATION 'define-transaction)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'define-transaction
-        (ARGLIST 'define-transaction))))
-      :arguments (:user-supplied (:label "Transaction Name:"
-    :default *ui-transaction*
-    :type (:documentation
-      "Name of the transaction."
-      :sexp))
-   (:label "Database calls:"
-    :default nil
-    :type (:documentation
-     "A list of database calls."
-     :sexp))
-   ,*ucl-dir*
-   (:label "Pathname :"
-    :default *ui-file*
-    :type (:documentation
-      "The default file in which it will be saved."
-      :SEXP))
-  :label "Give parameters for DEFINE TRANSACTION:")
-      :menus ((command-menu :COLUMN "Definition"))
-      :documentation "Used to define a transaction."
-      :keys ((#\SUPER-D #\SUPER-T)))
-  (SEND *output-window*
-:append-item
-(FORMAT nil "~S"
-(LIST 'DEFINE-TRANSACTION transaction forms
-      (SETQ keywords (LIST 'dir dir
-     'path path)))))
-  (DEFINE-TRANSACTION transaction forms keywords))
-;**************************************************************************
-;                DEFCOMMAND  FOR MODIFY TRANSACTION                                *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC modify-transaction) (transaction dir path
-      &AUX keywords)
-    `(:description ,(STRING-APPEND (DOCUMENTATION 'modify-transaction)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'modify-transaction
-        (ARGLIST 'modify-transaction))))
-      :arguments (:user-supplied (:label "Transaction Name:"
-    :default *ui-transaction*
-    :type (:documentation
-      "Name of the transaction to be modified."
-      :sexp))
-   (:label "Directory:"
-    :default *ui-directory*
-    :type (:documentation
-      "Default directory in which it can be found, if not in memory."
-      :SEXP))
-   (:label "Pathname :"
-    :default *ui-file*
-    :type (:documentation
-      "The default file in which it can be found, if not in memory."
-      :SEXP))
-  :label "Give parameters for MODIFY TRANSACTION:")
-      :menus ((command-menu :COLUMN "Manipulation"))
-      :documentation "Used to modify a transaction."
-      :keys ((#\SUPER-M #\SUPER-T)))
-  (SEND *output-window*
-:append-item
-(FORMAT nil "~S"
-(LIST 'MODIFY-TRANSACTION transaction
-      (SETQ keywords (LIST 'dir dir
-     'path path)))))
-  (MODIFY-TRANSACTION transaction keywords))
-;**************************************************************************
-;                DEFCOMMAND  FOR DEFINE DATABASE                                   *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC define-database) (database directory doc env
-     &AUX keywords)
-    `(:description ,(STRING-APPEND (DOCUMENTATION 'define-database)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'define-database
-        (ARGLIST 'define-database))))
-      :arguments (:user-supplied (:label "Database Name:"
-    :default nil
-    :type (:documentation
-      "Name of the database."
-      :sexp))
-   (:label "Directory Name:"
-    :default *ui-directory*
-    :type (:documentation
-     "Name of the save directory for this database."
-     :sexp))
-   (:label "Documentation:"
-    :default *ui-doc*
-    :type (:documentation
-      "Documentation for the database."
-      :string))
-   (:label "Environment:"
-    :default nil
-    :type (:documentation
-      "Name of the environment to be used to replace the default settings."
-      :sexp))
-  :label "Give parameters for DEFINE DATABASE:")
-      :menus ((command-menu :COLUMN "Definition"))
-      :documentation "Used to define a database in a given directory."
-      :keys ((#\SUPER-D #\SUPER-D)))
-  (SEND *output-window*
-:append-item
-(FORMAT nil "~S"
-(LIST 'DEFDB database
-      (SETQ keywords (LIST 'dir directory
-     'doc doc
-     'environment env)))))
-  (DEFDB database keywords))
-;**************************************************************************
-;                DEFCOMMAND  FOR MODIFY DATABASE                                   *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC modify-database) (database new-database directory doc
-     &AUX keywords)
-    `(:description ,(STRING-APPEND (DOCUMENTATION 'modify-database)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'modify-database
-        (ARGLIST 'modify-database))))
-      :arguments (:user-supplied (:label "Database Name:"
-    :default nil
-    :type (:documentation
-      "Name of the database."
-      :sexp))
-   (:label "New Database Name:"
-    :default nil
-    :type (:documentation
-      "If the database is to be renamed specify the new name."
-      :sexp))
-   (:label "Directory Name:"
-    :default NIL
-    :type (:documentation
-     "To change the save directory for this database specify a new directory."
-     :sexp))
-   (:label "Documentation:"
-    :default NIL
-    :type (:documentation
-      "New documentation for the database."
-      :string))
-  :label "Give parameters for MODIFY DATABASE:")
-      :menus ((command-menu :COLUMN "Manipulation"))
-      :documentation "Used to modify the features a database."
-      :keys ((#\SUPER-M #\HYPER-D)))
-  (SEND *output-window*
-:append-item
-(FORMAT nil "~S"
-(LIST 'MODIFY-DATABASE database
-      (SETQ keywords (LIST 'database-name new-database
-      'dir directory
-     'doc doc
-     )))))
-  (MODIFY-DATABASE database keywords))
-;**************************************************************************
-;                DEFCOMMAND  FOR MODIFY ATTRIBUTE                                  *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC modify-attribute) (relation attr new-attr def doc format
-     &AUX keywords)
-    `(:description ,(STRING-APPEND (DOCUMENTATION 'modify-attribute)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'modify-attribute
-        (ARGLIST 'modify-attribute))))
-      :arguments (:user-supplied (:label "Relation Name:"
-    :default *ui-relation*
-    :type (:documentation
-      "Name of the relation."
-      :sexp))
-   (:label "Attribute Name:"
-    :default nil
-    :type (:documentation
-      "Name of the attribute."
-      :sexp))
-   (:label "New Attribute Name:"
-    :default nil
-    :type (:documentation
-      "If the attribute is to be renamed specify the new name."
-      :sexp))
-   (:label "Default Value:"
-    :default NIL
-    :type (:documentation
-     "To change the default value of this attribute specify a new value."
-     :sexp))
-   (:label "Documentation:"
-    :default NIL
-    :type (:documentation
-      "New documentation for the attribute."
-      :string))
-   (:label "Default width :"
-    :default nil
-    :type (:documentation
-      "The new default width to be used for this attribute."
-      :sexp))
-  :label "Give parameters for MODIFY ATTRIBUTE:")
-      :menus ((command-menu :COLUMN "Manipulation"))
-      :documentation "Used to modify the features a attribute."
-      :keys ((#\SUPER-M #\SUPER-A)))
-  (SEND *output-window*
-:append-item
-(FORMAT nil "~S"
-(LIST 'MODIFY-ATTRIBUTE relation attr
-      (SETQ keywords (LIST 'attribute-name new-attr
-     'def def
-     'doc doc 'format format
-     )))))
-  (MODIFY-ATTRIBUTE relation attr keywords))
-;**************************************************************************
-;                DEFCOMMAND  FOR MODIFY VIEW *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC modify-view) (view def doc
-     &AUX keywords)
-    `(:description ,(STRING-APPEND (DOCUMENTATION 'modify-view)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'modify-view
-        (ARGLIST 'modify-view))))
-      :arguments (:user-supplied (:label "View Name:"
-    :default NIL
-    :type (:documentation
-      "Name of the view."
-      :sexp))
-   (:label "View Definition:"
-    :default nil
-    :type (:documentation
-      "New definition of the view."
-      :sexp))
-   (:label "Documentation:"
-    :default NIL
-    :type (:documentation
-      "New documentation for the view."
-      :string))
-  :label "Give parameters for MODIFY VIEW:")
-      :menus ((command-menu :COLUMN "Manipulation"))
-      :documentation "Used to modify the features a view."
-      :keys ((#\SUPER-M #\SUPER-V)))
-  (SEND *output-window*
-:append-item
-(FORMAT nil "~S"
-(LIST 'MODIFY-VIEW view
-      (SETQ keywords (LIST
-     'view-def def
-     'view-doc doc
-     )))))
-  (MODIFY-VIEW view keywords))
-;**************************************************************************
-;                DEFCOMMAND  FOR MODIFY RELATION                                   *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC modify-relation) (rel new-rel add-att del-att ren-att
-     imp sto format key dir doc
-     &AUX keywords)
-    `(:description ,(STRING-APPEND (DOCUMENTATION 'modify-relation)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'modify-relation
-        (ARGLIST 'modify-relation))))
-      :arguments (:user-supplied (:label "Relation Name:"
-    :default *ui-relation*
-    :type (:documentation
-      "Name of the Relation."
-      :sexp))
-   (:label "New Relation Name:"
-    :default nil
-    :type (:documentation
-      "If the relation is to be renamed specify the new name."
-      :sexp))
-   (:label "Add attributes:"
-    :default NIL
-    :type (:documentation
-     "Specify a list of attribute-descriptor pairs for attributes to be added to this relation."
-     :sexp))
-   (:label "Delete attributes:"
-    :default NIL
-    :type (:documentation
-     "Specify a list of attributes in this relation which are to be deleted."
-     :sexp))
-   (:label "Rename attributes:"
-    :default NIL
-    :type (:documentation
-     "To rename some of the attributes provide a list of the form (<old-attribute new-attribute>)."
-     :sexp))
-   (:label "Implementation Type:"
-    :default NIL
-    :type (:documentation
-     "To change the implementation type of this relation specify a new value."
-     :sexp))
-   (:label "Storage structure:"
-    :default NIL
-    :type (:documentation
-     "To change the storage structure of this relation specify a new value."
-     :sexp))
-   (:label "Format:"
-    :default NIL
-    :type (:documentation
-     "To change the format for this relation specify a new format as a list of values."
-     :sexp))
-   (:label "Key:"
-    :default NIL
-    :type (:documentation
-     "To change the key for this relation specify a new key as a list of attributes."
-     :sexp))
-   (:label "Directory Name:"
-    :default NIL
-    :type (:documentation
-        "To change the save directory for this relation specify a new directory."
-     :sexp))
-   (:label "Documentation:"
-    :default NIL
-    :type (:documentation
-      "New documentation for the relation."
-      :string))
-  :label "Give parameters for MODIFY RELATION:")
-      :menus ((command-menu :COLUMN "Manipulation"))
-      :documentation "Used to modify the features a relation."
-      :keys ((#\SUPER-M #\SUPER-R)))
-  (SEND *output-window*
-:append-item
-(FORMAT nil "~S"
-(LIST 'MODIFY-RELATION rel
-      (SETQ keywords (LIST 'relation new-rel
-     'add-attributes add-att
-     'delete-attributes del-att
-     'rename-attributes ren-att
-     'imp imp
-     'sto sto
-     'format format
-     'key key
-     'doc doc
-     'dir dir
-     )))))
-  (MODIFY-RELATION rel keywords))
-;**************************************************************************
-;                DEFCOMMAND  FOR DEFINE ENVIRONMENT                                *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC define-environment) (environment save dir err par-check
-        rel-imp rel-sto status sys-imp
-        sys-sto val-check warn
-        &AUX keywords)
-    `(:description ,(STRING-APPEND (DOCUMENTATION 'define-environment)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'define-environment
-        (ARGLIST 'define-environment))))
-      :arguments (:user-supplied (:label "Environment Name:"
-    :default nil
-    :type (:documentation
-      "Name of the environment."
-      :sexp))
-   (:label "Auto save:"
-    :default nil
-    :type (:documentation
-     "Automatically saves all the modified relations after each function." :boolean))
-   ,*ucl-dir*
-   (:label "Errors:"
-    :default T
-    :type (:documentation
-      "Controls the printing of the error messages."
-      :boolean))
-   (:label "Parameter Checking:"
-    :default T
-    :type (:documentation
-      "Controls the checking of the parameters."
-      :boolean))
-   (:label "Relation Implementation:"
-    :default *ui-imp*
-    :type (:documentation
-      "Default implementation of the user relations."
-      :sexp))
-   (:label "Relation storage structure:"
-    :default *ui-ss*
-    :type (:documentation
-      "Default storage structure for the user relations."
-      :sexp))
-   (:label "Status:"
-    :default T
-    :type (:documentation
-      "Controls the printing of the status messages."
-      :boolean))
-   (:label "System Implementation:"
-    :default nil
-    :type (:documentation
-      "Default implementation of the system relations. Can not change this when a database is active."
-      :sexp))
-   (:label "System storage structure:"
-    :default nil
-    :type (:documentation
-      "Default storage structure for the system relations. Can not change this when a database is active."
-      :sexp))
-   (:label "Validity Checking:"
-    :default T
-    :type (:documentation
-      "Controls the checking of the values during insertion and modification for validity."
-      :boolean))
-   (:label "Warnings:"
-    :default T
-     :type (:documentation
-      "Controls the printing of the warning messages."
-      :boolean))
-  :label "Give parameters for DEFINE ENVIRONMENT:")
-      :menus ((command-menu :COLUMN "Definition"))
-      :documentation "Used to define an environment in a given directory."
-      :keys ((#\SUPER-D #\SUPER-E)))
-  (SEND *output-window*
-:append-item
-(FORMAT nil "~S"
-(LIST 'DEFENV environment
-      (SETQ keywords (IF *active-db*
-   (LIST 'auto-save save 'para par-check
-     'dir dir 'rel-imp rel-imp 'rel-sto
-     rel-sto 'errors err 'status status
-     'validity val-check 'warnings warn)
-        (LIST 'auto-save save 'para par-check
-     'dir dir 'rel-imp rel-imp 'rel-sto
-     rel-sto 'errors err 'status status
-     'sys-imp sys-imp 'sys-sto sys-sto
-     'validity val-check 'warnings warn))))))
-  (DEFENV environment keywords))
-;**************************************************************************
-;                DEFCOMMAND  FOR DEFINE RELATION                                   *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC define-relation) (relation attr-des tup
-     dir doc key imp ss &AUX keywords)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'define-relation)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'define-relation
-        (ARGLIST 'define-relation))))
-      :arguments (:user-supplied (:label "Relation Name:"
-    :default nil
-    :type (:documentation
-     "Name of the relation to be defined."
-     :sexp))
-   ,*ucl-attr-desc*
-   ,*ucl-format*
-   ,*ucl-dir*
-   ,*ucl-doci*
-   ,*ucl-key*
-   ,*ucl-imp*
-   ,*ucl-sto*
-     :label "Give parameters for DEFINE RELATION:")
-      :menus ((command-menu :COLUMN "Definition"))
-      :documentation "used to define a relation."
-      :keys ((#\SUPER-D #\SUPER-R)))
-  (SEND *output-window* :append-item (FORMAT nil "~S"
-(LIST 'DEFREL
-      relation attr-des
-      (SETQ keywords
-    (LIST 'tuple-format tup 'dir dir 'doc doc
-  'key key 'imp imp 'sto ss)))))
-  (DEFREL relation attr-des keywords))
-;**************************************************************************
-;                DEFCOMMAND  FOR DEFINE VIEW *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC define-view) (viewname view-definition doc)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'define-view)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'define-view
-        (ARGLIST 'define-view))))
-      :arguments (:user-supplied (:label "View Name:"
-    :default nil
-    :type (:documentation
-       "Specify a name for the view."
-     :sexp))
-   (:label "View Definition:"
-    :default *ui-viewdef*
-    :type (:documentation
-       "Specify a definition for the view."
-     :sexp))
-   (:label "View Documentation:"
-    :default nil
-    :type (:documentation
-       "Specify documentation for the view."
-     :sexp))
- :label "Give parameters for DEFINE VIEW:")
-      :menus ((command-menu :COLUMN "Definition"))
-      :documentation "Used to define a view."
-      :keys ((#\SUPER-D #\SUPER-V)))
-  (SEND *output-window* :append-item (FORMAT nil "~S"
-(LIST 'DEFVIEW viewname view-definition doc)))
-  (DEFVIEW viewname view-definition doc))
-;**************************************************************************
-;                DEFCOMMAND  FOR DEFINE ATTRIBUTE                                  *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC define-attribute) (relation-name attr-des key
-      &AUX keywords)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'define-attribute)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'define-attribute
-        (ARGLIST 'define-attribute))))
-      :arguments (:user-supplied (:label "Relation name: "
-    :default *ui-relation*
-    :type (:documentation
-       "The name of the relation to which new attributes are to be added." :SEXP))
-   ,*ucl-attr-desc*
-   (:label "Key: "
-    :default nil
-    :type (:documentation
-       "New key for the relation if it is to be different from the previous value. Specify a list of attributes."
-       :SEXP))
- :label "Give parameters for DEFINE ATTRIBUTE:")
-      :menus ((command-menu :COLUMN "Definition"))
-      :documentation "Used to add attributes to relations."
-      :keys ((#\SUPER-D #\SUPER-A)))
-  (SEND *output-window* :append-item (FORMAT nil "~S"
-(LIST 'DEFINE-ATTRIBUTE relation-name attr-des
-      (SETQ keywords (LIST 'key key)))))
-  (DEFINE-ATTRIBUTE relation-name attr-des keywords))
-;**************************************************************************
-;                DEFCOMMAND  FOR MODIFY TUPLES                                     *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC modify-tuples) (relation where-clause attributes values
-     &AUX keywords)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'modify-tuples)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'modify-tuples
-        (ARGLIST 'modify-tuples))))
-      :arguments (:user-supplied (:label "Relation: "
-    :default *ui-relation*
-    :type (:documentation
-       "Specify the relation whose tuples are to be modified."
-     :sexp))
-   ,*ucl-where*
-   (:label "Attributes: "
-    :default *ui-attributes*
-    :type (:documentation
-       "Specify a list of attributes in the above relation to be modified." :sexp))
-   (:label "Values: "
-    :default *ui-values*
-    :type (:documentation
-       "Specify a corresponding list of values to modify the above attributes." :sexp))
- :label "Give parameters for MODIFY TUPLES ==>")
-      :menus ((command-menu :COLUMN "Manipulation"))
-      :documentation "Used to modify tuples in a relation."
-      :keys ((#\SUPER-M #\HYPER-M)))
-  (SEND *output-window* :append-item (FORMAT nil "~S"
-(LIST 'MODIFY relation (SETQ keywords (LIST 'where where-clause
-       'attr attributes
-       'values values)))))
-  (MODIFY relation keywords))
-;**************************************************************************
-;                DEFCOMMAND  FOR DELETE TUPLES                                     *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC delete-tuples) (relation where-clause)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'delete-tuples)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'delete-tuples
-        (ARGLIST 'delete-tuples))))
-      :arguments (:user-supplied (:label "Relation: "
-    :default *ui-relation*
-    :type (:documentation
-       "Specify a relation whose tuples are to be deleted."
-     :sexp))
-   (:label "Where clause: "
-    :default nil
-    :type (:documentation
-       "Deletes the tuples which satisfy this condition."
-     :sexp))
- :label "Give parameters for DELETE TUPLES ==>")
-      :menus ((command-menu :COLUMN "Manipulation"))
-      :documentation "Used to delete tuples in a relation."
-      :keys (#\HYPER-D))
-  (SEND *output-window* :append-item (FORMAT nil "~S"
-(LIST 'DELETE-TUPLES relation (LIST 'where where-clause))))
-  (DELETE-TUPLES  relation (LIST 'where where-clause)))
-;**************************************************************************
-;                DEFCOMMAND  FOR RETRIEVE TUPLES                                   *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC retrieve-tuples) (relation attributes where-clause
-     into dir doc key imp sto
-     qprint to-file sort
-     format wide number print
-     tuples qsort stream unique index-name
-     &AUX keywords)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'retrieve)
-       (FORMAT NIL "  ~S"
-      (CONS
-        'retrieve
-        (ARGLIST 'retrieve))))
-      :arguments (:user-supplied ,*ucl-retrieve-rel*
-   ,*ucl-attributes*
-   ,*ucl-where*
-   ,*ucl-into*
-   ,*ucl-dir*
-   ,*ucl-doco*
-   ,*ucl-key*
-   ,*ucl-imp*
-   ,*ucl-sto*
-   ,*ucl-qprint*
-   ,*ucl-out*
-   ,*ucl-sort*
-   ,*ucl-format*
-   ,*ucl-wide*
-   ,*ucl-num*
-   ,*ucl-print*
-   ,*ucl-tuples*
-   ,*ucl-quick-sort*
-   ,*ucl-stream*
-   ,*ucl-unique*
-    ,*ucl-index-name*
- :label "Give parameters for RETRIEVE TUPLES ==>")
-      :menus ((command-menu :COLUMN "Operators"))
-      :documentation "Used to Retrieve tuples in a relation."
-      :keys (#\HYPER-R))
-  (SEND *output-window* :append-item
-(FORMAT nil "~S"
-(LIST 'RETRIEVE
-      relation
-      (SETQ keywords
-    (LIST 'project
-   (IF (EQUAL attributes T)
-       NIL
-     attributes)
-   'where where-clause 'into into
-   'dir dir 'doc doc 'key key 'imp imp 'sto sto
-    'qprint (NOT qprint) 'output-to-file to-file
-   'sort sort 'format format
-   'wide wide 'num number
-   'print print 'tuples tuples
-   'quick-sort qsort 'stream stream
-   'unique unique 'index-name index-name)))))
-  (RETRIEVE relation keywords))
-;**************************************************************************
-;                DEFCOMMAND  FOR SELECT TUPLES                                     *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC select) (relation where-clause
-     into dir doc key imp sto
-     qprint to-file sort
-     format wide number print
-     tuples qsort stream unique index-name
-     &AUX keywords)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'select-tuples)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'select-tuples
-        (ARGLIST 'select-tuples))))
-      :arguments (:user-supplied ,*ucl-retrieve-rel*
-   ,*ucl-where*
-   ,*ucl-into*
-   ,*ucl-dir*
-   ,*ucl-doco*
-   ,*ucl-key*
-   ,*ucl-imp*
-   ,*ucl-sto*
-   ,*ucl-qprint*
-   ,*ucl-out*
-   ,*ucl-sort*
-   ,*ucl-format*
-   ,*ucl-wide*
-   ,*ucl-num*
-   ,*ucl-print*
-   ,*ucl-tuples*
-   ,*ucl-quick-sort*
-   ,*ucl-stream*
-   ,*ucl-unique*
-   ,*ucl-index-name*
- :label "Give parameters for SELECT TUPLES ==>")
-      :menus ((command-menu :COLUMN "Operators"))
-      :documentation "Used to Select tuples in a relation."
-      :keys ((#\SUPER-R #\SUPER-S)))
-  (SEND *output-window* :append-item
-(FORMAT nil "~S"
-(LIST 'SELECT-TUPLES
-      relation
-      (SETQ keywords
-    (LIST
-   'where where-clause 'into into
-   'dir dir 'doc doc 'key key 'imp imp 'sto sto
-   'qprint (NOT qprint) 'output-to-file to-file
-   'sort sort 'format format
-   'wide wide 'num number
-   'print print 'tuples tuples
-   'quick-sort qsort 'stream stream
-   'unique unique 'index-name index-name)))))
-  (RETRIEVE relation (APPEND (LIST 'project nil) keywords)))
-;**************************************************************************
-;                DEFCOMMAND  FOR PROJECT TUPLES                                    *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC Project) (relation attributes
-      into dir doc key imp sto
-      qprint to-file sort
-      format wide number print tuples
-      qsort stream unique
-      &AUX keywords)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'project)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'project
-        (ARGLIST
-          'project))))
-      :arguments (:user-supplied ,*ucl-retrieve-rel*
-   ,*ucl-attributes*
-   ,*ucl-into*
-   ,*ucl-dir*
-   ,*ucl-doco*
-   ,*ucl-key*
-   ,*ucl-imp*
-   ,*ucl-sto*
-   ,*ucl-qprint*
-   ,*ucl-out*
-   ,*ucl-sort*
-   ,*ucl-format*
-   ,*ucl-wide*
-   ,*ucl-num*
-   ,*ucl-print*
-   ,*ucl-tuples*
-   ,*ucl-quick-sort*
-   ,*ucl-stream*
-   ,*ucl-unique*
- :label "Give parameters for PROJECT TUPLES ==>")
-      :menus ((command-menu :COLUMN "Operators"))
-      :documentation "Used to Project tuples in a relation."
-      :keys ((#\SUPER-R #\SUPER-P)))
-  (SEND *output-window* :append-item
-(FORMAT nil "~S"
-(LIST 'PROJECT
-      relation
-      (SETQ keywords
-    (LIST 'project (IF (EQUAL attributes T)
-   nil
-        attributes)
-    'into into 'dir dir 'doc doc 'key key 'imp imp 'sto sto
-    'qprint (NOT qprint) 'output-to-file to-file
-    'sort sort 'format format
-    'wide wide 'num number 'print print 'tuples tuples
-    'quick-sort qsort 'stream stream 'unique unique)))))
-  (RETRIEVE relation (APPEND (LIST 'where t) keywords)))
-;**************************************************************************
-;                DEFCOMMAND  FOR COMMIT TRANSACTION                                *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC commit-transaction) (trans dir path &AUX keywords)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'commit-transaction)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'commit-transaction
-        (ARGLIST
-          'commit-transaction))))
-      :arguments (:user-supplied (:label "Name of the transaction :"
-    :default *ui-transaction*
-    :type (:documentation
-       "The name of an existing transaction." :SEXP))
-   (:label "Name of the directory:"
-    :default *ui-directory*
-    :type (:documentation
-       "Name of the directory which contains the transaction file, if the transaction is not in the memory." :SEXP))
-   (:label "Pathname:"
-    :default *ui-file*
-    :type (:documentation
-    "If the transaction is not in memory, provide the pathname for the transaction file. It defaults to <transaction>.lisp." :SEXP))
- :label "Give parameters for COMMIT TRANSACTION")
-      :menus ((command-menu :COLUMN "Operators"))
-      :documentation "Commit a transaction - execute all the database calls in it."
-      :keys ((#\SUPER-T #\SUPER-C)))
-  (SEND *output-window* :append-item
-(FORMAT nil "~S"
-(LIST 'COMMIT-TRANSACTION trans (SETQ keywords
-         (LIST 'dir dir
-        'path path)))))
-  (COMMIT-TRANSACTION trans keywords)
-)
-;**************************************************************************
-;                DEFCOMMAND  FOR JOIN        *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC join) (into from project where
-      tuples format dir doc key imp sto
-             print unique &AUX keywords)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'join)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'join
-        (ARGLIST
-          'join))))
-      :arguments (:user-supplied (:label "Output relation :"
-    :default *ui-join-into*
-    :type (:documentation
-       "If not provided, the result of JOIN is stored in a temporary relation unless only the resultant tuples are requested." :SEXP))
-   (:LABEL "FROM :"
-    :DEFAULT *ui-from*
-    :TYPE (:DOCUMENTATION
-     "Specify a list of two relations to be joined." :SEXP))
-   (:label "Project :"
-    :default NIL
-    :type (:documentation
-       "This gives the attributes in the output relation. Example: (rel1.* a3 (rel2.a1 a4)) ==> All the attributes in rel1, attribute A3 of rel2 and atribute A1 of rel2 renamed as A4." :SEXP))
-   (:label "Where :"
-    :default *ui-over*
-    :type (:documentation
-     "The join clause using the theta-operators. It is a where clause consisting of attributes from the relations being joined." :SEXP))
-   (:label "Tuples?"
-    :default NIL
-    :type (:documentation
-     "Specify if the resultant tuples be returned rather than inserted in a relation. The following parameters can be ignored if this is true."
-     :boolean))
-   ,*ucl-format*
-   ,*ucl-dir*
-   ,*ucl-doco*
-   ,*ucl-key*
-   ,*ucl-imp*
-   ,*ucl-sto*
-   ,*ucl-print*
-   ,*ucl-unique*
- :label "Give parameters for JOIN")
-      :menus ((command-menu :COLUMN "Operators"))
-      :documentation "Used to join relations."
-      :keys (#\SUPER-J))
-  (SEND *output-window* :append-item
-(FORMAT nil "~S"
-(LIST 'JOIN 'from from
-      (SETQ keywords (LIST 'project project
-     'into into
-     'tuples tuples
-     'format format
-     'dir dir
-     'doc doc
-     'key key
-     'imp imp
-     'sto sto
-     'print print
-     'where where 'unique unique)))))
-  (JOIN-INTERNAL (APPEND (LIST 'from from) keywords))
-)
-;**************************************************************************
-;                DEFCOMMAND  FOR DESTROY DATABASE                                 *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC destroy-database) (database disk &AUX keywords)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'destroy-database)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'destroy-database
-        (ARGLIST
-          'destroy-database))))
-      :arguments (:user-supplied (:label "Database Name:"
-    :default nil
-    :type (:documentation
-       "Name of the database to be destroyed." :SEXP))
-   (:label "Delete from the DISK:"
-    :default NIL
-    :type (:documentation
-     "IF YES all the files pertaining to this database are deleted but NOT EXPUNGED." :BOOLEAN))
- :label "Give parameters for DESTROY DATABASE:")
-      :menus ((command-menu :COLUMN "Manipulation"))
-      :documentation "Used to destroy databases"
-      :keys ((#\SUPER-K #\SUPER-D)))
-  (SEND *output-window* :append-item
-(FORMAT nil "~S"
-(LIST 'DESTROY-DATABASE database
-      (SETQ keywords (LIST 'disk disk)))))
-  (DESTROY-DATABASE database keywords)
-)
-;**************************************************************************
-;                DEFCOMMAND  FOR DESTROY DOMAIN                                    *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC destroy-domain) (domain)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'destroy-domain)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'destroy-domain
-        (ARGLIST
-          'destroy-domain))))
-      :arguments (:user-supplied (:label "Domain Name:"
-    :default nil
-    :type (:documentation
-       "Name of the domain to be destroyed." :SEXP))
- :label "Give parameters for DESTROY DOMAIN:")
-      :menus ((command-menu :COLUMN "Manipulation"))
-      :documentation "Used to destroy domains."
-      :keys (#\SUPER-HYPER-K))
-  (SEND *output-window* :append-item
-(FORMAT nil "~S"
-(LIST 'DESTROY-DOMAIN domain)))
-  (DESTROY-DOMAIN domain))
-;**************************************************************************
-;                DEFCOMMAND  FOR DESTROY IMPLEMENTATION                            *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC destroy-implementation) (implementation)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'destroy-implementation)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'destroy-implementation
-        (ARGLIST
-          'destroy-implementation))))
-      :arguments (:user-supplied (:label "Implementation Name:"
-    :default nil
-    :type (:documentation
-       "Name of the implementation to be destroyed." :SEXP))
- :label "Give parameters for DESTROY IMPLEMENTATION:")
-      :menus ((command-menu :COLUMN "Manipulation"))
-      :documentation "Used to destroy implementations."
-      :keys ((#\SUPER-K #\SUPER-I)))
-  (SEND *output-window* :append-item
-(FORMAT nil "~S"
-(LIST 'DESTROY-IMPLEMENTATION implementation)))
-  (DESTROY-IMPLEMENTATION implementation))
-;**************************************************************************
-;                DEFCOMMAND  FOR DESTROY INDEX                            *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC DESTROY-INDEX) (relation-name index-name)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'destroy-index)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'destroy-index
-        (ARGLIST
-          'destroy-index))))
-      :arguments (:user-supplied (:label "Relation Name:"
-    :default nil
-    :type (:documentation
-       "Name of the relation on which the index to be destroyed is defined." :SEXP))
-   (:label "Index Name:"
-    :default nil
-    :type (:documentation
-       "Name of the index to be destroyed." :SEXP))
-     :label "Give parameters for DESTROY INDEX:")
-      :menus ((command-menu :COLUMN "Manipulation"))
-      :documentation "Used to destroy indices."
-      :keys ((#\SUPER-K #\HYPER-I)))
-  (SEND *output-window* :append-item
-(FORMAT nil "~S"
-(LIST 'DESTROY-INDEX relation-name index-name)))
-  (DESTROY-INDEX relation-name index-name))
-;**************************************************************************
-;                DEFCOMMAND  FOR DESTROY STORAGE STRUCTURE                         *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC destroy-storage-structure) (storage-structure)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'destroy-storage-structure)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'destroy-storage-structure
-        (ARGLIST
-          'destroy-storage-structure))))
-      :arguments (:user-supplied (:label "Storage structure name:"
-    :default nil
-    :type (:documentation
-       "Name of the storage structure to be destroyed." :SEXP))
- :label "Give parameters for DESTROY STORAGE STRUCTURE:")
-      :menus ((command-menu :COLUMN "Manipulation"))
-      :documentation "Used to destroy storage structures."
-      :keys ((#\SUPER-K #\SUPER-S)))
-  (SEND *output-window* :append-item
-(FORMAT nil "~S"
-(LIST 'DESTROY-STORAGE-STRUCTURE storage-structure)))
-  (DESTROY-STORAGE-STRUCTURE storage-structure))
-;**************************************************************************
-;                DEFCOMMAND  FOR DESTROY VIEW                                      *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC destroy-view) (view)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'destroy-view)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'destroy-view
-        (ARGLIST
-          'destroy-view))))
-      :arguments (:user-supplied (:label "View name:"
-    :default nil
-    :type (:documentation
-       "Name of the view to be destroyed."
-       :SEXP))
- :label "Give parameters for DESTROY VIEW:")
-      :menus ((command-menu :COLUMN "Manipulation"))
-      :documentation "Used to destroy views."
-      :keys ((#\SUPER-K #\SUPER-V)))
-  (SEND *output-window* :append-item
-(FORMAT nil "~S"
-(LIST 'DESTROY-VIEW view)))
-  (DESTROY-VIEW view))
-;**************************************************************************
-;                DEFCOMMAND  FOR DESTROYREL   *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC destroy-relation) (relation disk &AUX keywords)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'destroy-relation)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'destroy-relation
-        (ARGLIST
-          'destroy-relation))))
-      :arguments (:user-supplied (:label "Relation Name:"
-    :default nil
-    :type (:documentation
-       "Name of the relation to be destroyed." :SEXP))
-   (:label "Delete from the DISK:"
-    :default NIL
-    :type (:documentation
-     "IF YES the file corresponding to this relation is deleted but NOT EXPUNGED." :BOOLEAN))
- :label "Give parameters for DESTROY RELATION:")
-      :menus ((command-menu :COLUMN "Manipulation"))
-      :documentation "Used to destroy relations"
-      :keys ((#\SUPER-K #\SUPER-R)))
-  (SEND *output-window* :append-item
-(FORMAT nil "~S"
-(LIST 'DESTROY-RELATION
-      relation (SETQ keywords (LIST 'disk disk)))))
-  (DESTROY-RELATION relation keywords)
-)
-;**************************************************************************
-;                DEFCOMMAND  FOR DESTROY ATTRIBUTE                                 *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC destroy-attribute) (relation attr key &AUX keywords)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'destroy-attribute)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'destroy-attribute
-        (ARGLIST
-          'destroy-attribute))))
-      :arguments (:user-supplied (:label "Relation Name:"
-    :default nil
-    :type (:documentation
-       "Name of the relation from which attributes are to be destroyed." :SEXP))
-   (:label "Attributes:"
-    :default nil
-    :type (:documentation
-       "List of attributes to destroy." :SEXP))
-   (:label "Key:"
-    :default NIL
-    :type (:documentation
-     "New key for the relation if it is to be different from the previous value or if any of the key attributes are destroyed." :SEXP))
- :label "Give parameters for DESTROY ATTRIBUTE:")
-      :menus ((command-menu :COLUMN "Manipulation"))
-      :documentation "Used to destroy attributes from relations"
-      :keys ((#\SUPER-K #\SUPER-A)))
-  (SEND *output-window* :append-item
-(FORMAT nil "~S"
-(LIST 'DESTROY-ATTRIBUTE relation (SETQ keywords (LIST 'attr attr
-      'key key)))))
-  (DESTROY-ATTRIBUTE relation keywords)
-)
-;**************************************************************************
-;                DEFCOMMAND  FOR SET UNION   *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC union) (from into tuples format
-       dir doc key imp sto print unique
-       &AUX keywords)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'relation-union)
-     (FORMAT NIL "  ~S"
-       (CONS
-        'relation-union
-        (ARGLIST
-          'relation-union))))
-      :arguments (:user-supplied (:label "List of two relations:"
-    :default NIL
-    :type (:documentation
-     "List of the names of two relations which will take part in the relation union operation. The attributes to be projected and a where clause can be specified for each relation using keywords. For instance, (REL1 (PROJECT <attr> WHERE <where-claue>) REL2 (WHERE <where-clause> PROJECT <attr>))." :SEXP))
-   ,*ucl-into*
-   (:label "Tuples?"
-    :default NIL
-    :type (:documentation
-     "Specify if the resultant tuples be returned rather than inserted in a relation. The following parameters can be ignored if this is true."
-     :boolean))
-   ,*ucl-format*
-   ,*ucl-dir*
-   ,*ucl-doco*
-   ,*ucl-key*
-   ,*ucl-imp*
-   ,*ucl-sto*
-   ,*ucl-print*
-   ,*ucl-unique*
-  :LABEL "Parameters for the set-union of two relations")
-      :menus ((command-menu :COLUMN "Operators"))
-      :documentation "Used to form union of two compatible relations"
-      :keys ((#\SUPER-O #\SUPER-U)))
-  (SEND *output-window* :append-item
-(FORMAT nil "~S"
-(LIST 'RELATION-UNION
-      (SETQ keywords (LIST 'into into
-     'from from 'tuples tuples
-     'format format 'dir dir 'doc doc
-     'key key 'imp imp 'sto sto
-     'print print 'unique unique)))))
-  (RELATION-UNION keywords))
-;**************************************************************************
-;                DEFCOMMAND  FOR SET DIFFERENCE                                    *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC difference) (from into tuples format
-       dir doc key imp sto print unique
-       &AUX keywords)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'relation-difference)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'relation-difference
-        (ARGLIST
-          'relation-difference))))
-      :arguments (:user-supplied (:label "List of two relations:"
-    :default NIL
-    :type (:documentation
-     "List of the names of two relations which will take part in the relation difference operation. The attributes to be projected and a where clause can be specified for each relation using keywords. For instance, (REL1 (PROJECT <attr> WHERE <where-claue>) REL2 (WHERE <where-clause> PROJECT <attr>))." :SEXP))
-   ,*ucl-into*
-   (:label "Tuples?"
-    :default NIL
-    :type (:documentation
-     "Specify if the resultant tuples be returned rather than inserted in a relation. The following parameters can be ignored if this is true."
-     :boolean))
-   ,*ucl-format*
-   ,*ucl-dir*
-   ,*ucl-doco*
-   ,*ucl-key*
-   ,*ucl-imp*
-   ,*ucl-sto*
-   ,*ucl-print*
-   ,*ucl-unique*
-  :LABEL "Parameters for the set-difference of two relations")
-      :menus ((command-menu :COLUMN "Operators"))
-      :documentation "Used to form difference of two compatible relations"
-      :keys ((#\SUPER-O #\SUPER-D)))
-  (SEND *output-window* :append-item
-(FORMAT nil "~S"
-(LIST 'RELATION-DIFFERENCE
-      (SETQ keywords (LIST 'into into
-     'from from 'tuples tuples
-     'format format 'dir dir 'doc doc
-     'key key 'imp imp 'sto sto
-     'print print 'unique unique)))))
-  (RELATION-DIFFERENCE keywords))
-;**************************************************************************
-;                DEFCOMMAND  FOR SET INTERSECTION                                  *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC intersection) (from into tuples format
-       dir doc key imp sto print unique
-       &AUX keywords)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'relation-intersection)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'relation-intersection
-        (ARGLIST
-          'relation-intersection))))
-      :arguments (:user-supplied (:label "List of two relations:"
-    :default NIL
-    :type (:documentation
-     "List of the names of two relations which will take part in the relation intersection operation. The attributes to be projected and a where clause can be specified for each relation using keywords. For instance, (REL1 (PROJECT <attr> WHERE <where-claue>) REL2 (WHERE <where-clause> PROJECT <attr>))." :SEXP))
-   ,*ucl-into*
-   (:label "Tuples?"
-    :default NIL
-    :type (:documentation
-     "Specify if the resultant tuples be returned rather than inserted in a relation. The following parameters can be ignored if this is true."
-     :boolean))
-   ,*ucl-format*
-   ,*ucl-dir*
-   ,*ucl-doco*
-   ,*ucl-key*
-   ,*ucl-imp*
-   ,*ucl-sto*
-   ,*ucl-print*
-   ,*ucl-unique*
-  :LABEL "Parameters for the set-intersection of two relations")
-      :menus ((command-menu :COLUMN "Operators"))
-      :documentation "Used to form intersection of two compatible relations"
-      :keys ((#\SUPER-O #\SUPER-I)))
-  (SEND *output-window* :append-item
-(FORMAT nil "~S"
-(LIST 'RELATION-INTERSECTION
-      (SETQ keywords (LIST 'into into
-     'from from 'tuples tuples
-     'format format 'dir dir 'doc doc
-     'key key 'imp imp 'sto sto
-     'print print 'unique unique)))))
-  (RELATION-INTERSECTION keywords))
-;**************************************************************************
-;                DEFCOMMAND  FOR AVERAGE     *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC average) (relation attribute unique where by tuples
-      &AUX keywords)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'average)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'average
-        (ARGLIST
-          'average))))
-      :arguments (:user-supplied (:label "Relation name:"
-    :default *ui-relation*
-    :type (:documentation
-     "Name of the relation which contains the attribute to be averaged." :SEXP))
-   ,*ucl-count-attr*
-   ,*ucl-count-unique*
-      ,*ucl-where*
-   ,*ucl-by*
-   ,*ucl-tuples*
-  :LABEL "Parameters for average:")
-      :menus ((command-menu :COLUMN "Operators"))
-      :documentation "Used to compute the average of the attribute values in a relation."
-      :keys ((#\SUPER-O #\SUPER-A)))
-  (SEND *output-window* :append-item
-(FORMAT nil "~S"
-(LIST 'AVERAGE relation attribute
-      (SETQ keywords (LIST 'unique unique
-     'where where 'by by 'tuples tuples)))))
-  (AVERAGE relation attribute keywords))
-;**************************************************************************
-;                DEFCOMMAND  FOR SUM         *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC sum) (relation attribute unique where by tuples
-  &AUX keywords)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'sum)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'sum
-        (ARGLIST
-          'sum))))
-      :arguments (:user-supplied (:label "Relation name:"
-    :default *ui-relation*
-    :type (:documentation
-     "Name of the relation which contains the attribute to be summed." :SEXP))
-   ,*ucl-count-attr*
-   ,*ucl-count-unique*
-   ,*ucl-where*
-   ,*ucl-by*
-   ,*ucl-tuples*
-  :LABEL "Parameters for sum:")
-      :menus ((command-menu :COLUMN "Operators"))
-      :documentation "Used to compute the sum of the attribute values in a relation."
-      :keys ((#\SUPER-O #\SUPER-S)))
-  (SEND *output-window* :append-item
-(FORMAT nil "~S"
-(LIST 'SUM relation attribute
-      (SETQ keywords (LIST 'unique unique 'by by 'tuples tuples
-     'where where)))))
-  (SUM relation attribute keywords))
-;**************************************************************************
-;                DEFCOMMAND  FOR SIZE        *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC size) (relation unique where by tuples &AUX keywords)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'size)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'size
-        (ARGLIST
-          'size))))
-      :arguments (:user-supplied (:label "Relation name:"
-    :default *ui-relation*
-    :type (:documentation
-     "Name of the relation whose size is required." :SEXP))
-   ,*ucl-count-unique*
-   ,*ucl-where*
-   ,*ucl-by*
-   ,*ucl-tuples*
-  :LABEL "Parameters for size:")
-      :menus ((command-menu :COLUMN "Operators"))
-      :documentation "Used to compute the size of the relation."
-      :keys (#\SUPER-HYPER-S))
-  (SEND *output-window* :append-item
-(FORMAT nil "~S"
-(LIST 'SIZE relation
-      (SETQ keywords (LIST 'unique unique 'by by 'tuples tuples
-     'where where)))))
-  (SIZE relation keywords))
-;**************************************************************************
-;                DEFCOMMAND  FOR COUNT-RTMS     *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC count) (relation attribute unique where by tuples
-         &AUX keywords)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'count-rtms)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'count-rtms
-        (ARGLIST
-          'count-rtms))))
-      :arguments (:user-supplied (:label "Relation name:"
-    :default *ui-relation*
-    :type (:documentation
-     "Name of the relation which contains the attribute to be used to find the number of tuples." :SEXP))
-   ,*ucl-count-attr*
-   ,*ucl-count-unique*
-   ,*ucl-where*
-   ,*ucl-by*
-   ,*ucl-tuples*
-  :LABEL "Parameters for count:")
-      :menus ((command-menu :COLUMN "Operators"))
-      :documentation "Used to compute the count of the attribute values in a relation."
-      :keys ((#\SUPER-O #\SUPER-C)))
-  (SEND *output-window* :append-item
-(FORMAT nil "~S"
-(LIST 'COUNT-RTMS relation attribute
-      (SETQ keywords (LIST 'unique unique 'by by 'tuples tuples
-     'where where)))))
-  (COUNT-RTMS relation attribute keywords))
-;**************************************************************************
-;                DEFCOMMAND  FOR MAXIMUM     *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC maximum) (relation attribute where by tuples
-      &AUX keywords)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'maximum)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'maximum
-        (ARGLIST
-          'maximum))))
-      :arguments (:user-supplied (:label "Relation name:"
-    :default *ui-relation*
-    :type (:documentation
-     "Name of the relation which contains the attribute to be maximumd." :SEXP))
-   ,*ucl-count-attr*
-   ,*ucl-where*
-   ,*ucl-by*
-   ,*ucl-tuples*
-  :LABEL "Parameters for maximum:")
-      :menus ((command-menu :COLUMN "Operators"))
-      :documentation "Used to compute the maximum of the attribute values in a relation."
-      :keys ((#\SUPER-O #\SUPER-M)))
-  (SEND *output-window* :append-item
-(FORMAT nil "~S"
-(LIST 'MAXIMUM relation attribute
-      (SETQ keywords (LIST 'where where 'by by 'tuples tuples)))))
-  (MAXIMUM relation attribute keywords))
-;**************************************************************************
-;                DEFCOMMAND  FOR MINIMUM     *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC minimum) (relation attribute where by tuples
-      &AUX keywords)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'minimum)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'minimum
-        (ARGLIST
-          'minimum))))
-      :arguments (:user-supplied (:label "Relation name:"
-    :default *ui-relation*
-    :type (:documentation
-     "Name of the relation which contains the attribute to be minimumd." :SEXP))
-   ,*ucl-count-attr*
-   ,*ucl-where*
-   ,*ucl-by*
-   ,*ucl-tuples*
-  :LABEL "Parameters for minimum:")
-      :menus ((command-menu :COLUMN "Operators"))
-      :documentation "Used to compute the minimum of the attribute values in a relation."
-      :keys (#\SUPER-HYPER-M))
-  (SEND *output-window* :append-item
-(FORMAT nil "~S"
-(LIST 'MINIMUM relation attribute
-      (SETQ keywords (LIST 'where where 'by by 'tuples tuples)))))
-  (MINIMUM relation attribute keywords))
-;**************************************************************************
-;                DEFCOMMAND  FOR HELP DBMS OBJECT                                  *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC inspect-dbms-object) (object)
-            `(:description "Information on any database object"
-      :arguments (:user-supplied (:label "Database Object:"
-    :default *ui-object*
-    :type (:documentation
-     "Specify a database object (COMMAND / RELATION / ATTRIBUTE)."
-     :sexp))
-  :LABEL "Help on the database object ->")
-      :menus help
-      :documentation "Used to inspect any database object."
-      :keys (#\CONTROL-HELP))
-  (SEND *output-window* :append-item
-(FORMAT nil "(INSPECT-DBMS-OBJECT '~S)" object))
-  (HELP-OBJECT object))
-;**************************************************************************
-;                DEFCOMMAND  FOR REFRESH OUTPUT WINDOW                             *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC clear-output-window) ()
-    `(:description "Clear the entire output window"
-      :menus display
-      :keys (#\CLEAR-SCREEN))
-  (SEND *output-window* :set-items nil)
-  (FUNCALL *OUTPUT-WINDOW* :SCROLL-TO
-   (- 2 (W:SHEET-NUMBER-OF-INSIDE-LINES *OUTPUT-WINDOW*))
-   :RELATIVE))
-;**************************************************************************
-;                DEFCOMMAND  FOR SCROLL DOWN *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC scroll-forward) ()
-   `(:description "scrolling forward in the output-window"
-     :menus display
-     :keys (#\CONTROL-V))
-  (FUNCALL *OUTPUT-WINDOW* :SCROLL-TO
-   (- (W:SHEET-NUMBER-OF-INSIDE-LINES *OUTPUT-WINDOW*) 2)
-   :RELATIVE))
-;**************************************************************************
-;                DEFCOMMAND  FOR SCROLL UP   *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC scroll-backward) ()
-   `(:description "scrolling backward in the output-window"
-     :menus display
-     :keys (#\META-V))
-  (FUNCALL *OUTPUT-WINDOW* :SCROLL-TO
-   (- 2 (W:SHEET-NUMBER-OF-INSIDE-LINES *OUTPUT-WINDOW*))
-   :RELATIVE))
-;**************************************************************************
-;                DEFCOMMAND  FOR SCROLL TO THE TOP                                 *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC scroll-to-top) ()
-   `(:description "scrolling to the top in the output-window"
-     :menus display
-     :keys (#\META-<))
-  (SEND *OUTPUT-WINDOW* :put-item-in-window
-(SEND *OUTPUT-WINDOW* :item-of-number 0)))
-;**************************************************************************
-;                DEFCOMMAND  FOR SCROLL TO THE BOTTOM                              *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC scroll-to-bottom) ()
-   `(:description "scrolling to the bottom in the output-window"
-     :menus display
-     :keys (#\META->))
-  (SEND *OUTPUT-WINDOW* :put-last-item-in-window))
-;**************************************************************************
-;                DEFCOMMAND  FOR SCROLL TO A RELATION                              *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC scroll-to-a-relation) (relation &aux index)
-     `(:description "Scroll to a particular relation"
-       :arguments (:user-supplied (:label "Relation Name:"
-    :default *ui-relation*
-    :type (:documentation
-     "Name of the relation to scroll to:"
-     :sexp))
-   :label "Scroll to the relation ==>")
-       :menus display
-       :keys (#\CONTROL-R))
-  (IF (AND (SETQ index (GETP relation :index))
-   (< index (LENGTH (SEND *output-window* :items))))
-      (SEND *output-window* :put-item-in-window
-    (SEND *output-window* :item-of-number index))
-    (FORMAT *typeout-window* "~%The relation ~S is not in the output-window"
-    relation)))
-;**************************************************************************
-;                DEFCOMMAND  FOR SEND OUTPUT TO A FILE                             *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC send-output-to-file) (file &AUX pathname)
-     `(:description "Send the contents of the output window to a file."
-       :arguments (:user-supplied (:label "File name:"
-       :default *ui-file*
-    :type (:documentation
-     "Name of the file to send the output to:" :sexp))
-   :label "Send the output window contents to:")
-       :menus display
-       :keys (#\HYPER-F))
-  (UNWIND-PROTECT
-      (SETQ pathname (CAR (ERRSET
-  (OPEN (SETQ pathname file) :characters t
-                     :direction :output        ;mrr 04.09.87
-                     :if-does-not-exist :create) nil)))
-    (IF (null pathname)
-(FORMAT *typeout-window* "~S is a bad file." file)
-      (MAPCAR (FUNCTION (LAMBDA (line &AUX item)
-       (COND ((OR (STRINGP line)
-  (NUMBERP line)
-  (SYMBOLP line))
-      (PRINC line pathname))
-     ((LISTP line)
-      (DOLIST (element line)
-(COND ((OR (STRINGP element)
-    (NUMBERP element)
-    (SYMBOLP element))
-       (PRINC element pathname))
-      ((NULL (LISTP element)) nil)
-      ((NULL (EQUAL (CAR element) :item1))
-       (PRINC (CAR element) pathname))
-      (T (SETQ item (CADR element))
-  (PRINC
-    (IF (LISTP item)
-        (CAR item)
-      item)
-    pathname)
-  )))))
-       (TERPRI pathname)))
-      (LISTARRAY (SEND *output-window* :items)))))
-  (IF pathname
-      (CLOSE pathname)))
-;**************************************************************************
-;                DEFCOMMAND  FOR INTRODUCTION                                      *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC introduction) ()
-    `(:description "Introduction to this interface."
-      :menus help
-      :keys (#\META-HELP))
-  (HELP))
-
-;**************************************************************************
-;                DEFCOMMAND  FOR SUB-MENU DBMS HELP                                *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC help) ()
-    `(:description "Introduction to the interface. Help on any database object (COMMAND / RELATION / ATTRIBUTE)."
-      :documentation "Introduction to the interface. Help on any database object (COMMAND/RELATION/ATTRIBUTE)."
-      :menus system-menu)
-  (LET ((command (SEND SELF :submenu-choose *help-submenu*)))
-    (IF command (SEND command :execute SELF))))
-;**************************************************************************
-;                DEFCOMMAND  FOR SUB-MENU DBMS COMMANDS                            *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC command-menu) ()
-    `(:description "Select a database command from a menu. A choose-variable-values window will be presented to get the arguments for that command."
-      :documentation "Select a database command from a menu. A choose-variable-values window will be presented to get the arguments for that command."
-      :menus system-menu
-      :keys (#\mouse-r-1))
-  (LET ((command (SEND SELF :submenu-choose *command-submenu*)))
-    (IF command (SEND command :execute SELF))))
-;**************************************************************************
-;                DEFCOMMAND  FOR SUB-MENU DISPLAY COMMANDS                         *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC display) ()
-    `(:description "Select an item from a menu to scroll in the output window."
-      :documentation "Select an item from a menu to scroll in the output window."
-      :menus system-menu)
-  (LET ((command (SEND SELF :submenu-choose *display-submenu*)))
-    (IF command (SEND command :execute SELF))))
-;**************************************************************************
-;                DEFCOMMAND  FOR EXIT        *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC kill) ()
-     `(:description "To exit the interface by killing the process."
-      :documentation "To exit the interface by killing the process."
-      :menus system-menu
-      :keys (#\SUPER-END))
-  (SEND dbms-frame1 :kill)
-  (SETQ dbms-frame1 nil))
-;**************************************************************************
-;                DEFCOMMAND  FOR QUIT        *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC exit) ()
-     `(:description "To exit the interface by burying it."
-      :documentation "To exit the interface by burying it."
-      :menus system-menu
-      :keys (#\END))
-  (SEND dbms-frame1 :bury))
-;**************************************************************************
-;              Build the command table       *
-;**************************************************************************
-(SETQ dbms-comtab (MAKE-INSTANCE 'UCL:COMMAND-TABLE
-     :name "Database command table"
-     :documentation "database help"))
-(UCL:BUILD-COMMAND-TABLE 'dbms-comtab 'dbms-rc
- '(help command-menu display kill exit
-   delete-tuples destroy-attribute
-                 destroy-database destroy-relation
-  destroy-domain destroy-implementation destroy-index
-  destroy-storage-structure destroy-view
-  modify-database modify-transaction
-  modify-domain modify-relation
-  modify-attribute modify-index modify-view modify-tuples
-   union intersection difference join
-         retrieve-tuples select project
- commit-transaction average sum count size maximum
- minimum
-   define-view define-database define-relation
-         define-attribute define-environment
- define-implementation define-storage-structure
- define-domain define-transaction define-index
- attach-relation detach-relation insert-tuples
-         load-database load-relation load-environment
-   maptuple print-relation save-database save-relation
-         save-environment save-transaction
-         active-database environment-status
- rename-attribute rename-relation
- rename-database mapt abort-transaction
- begin-transaction  end-transaction
-   inspect-dbms-object introduction
-   scroll-forward clear-output-window
-   scroll-to-top scroll-to-bottom
-   scroll-backward scroll-to-a-relation send-output-to-file))
-;**************************************************************************
-;            Init method to define the submenus COMMAND-MENU HELP                 *
-;            DISPLAY as part of the system menu.                                  *
-;**************************************************************************
-
-(DEFMETHOD (dbms-rc :after :init) (&rest ignore)
-  (declare (special command-menu))
-  (SETQ
-   *help-submenu*  (MAKE-INSTANCE 'W:menu
-   :pop-up t
-   :dynamic t
-   :superior W:mouse-sheet
-                                  :item-list-pointer 'help)
-   *command-submenu*  (MAKE-INSTANCE 'W:menu
-      :pop-up t
-      :dynamic t
-      :multicolumn t
-                                     :superior W:mouse-sheet
-                                     :column-spec-list command-menu)
-   *display-submenu* (MAKE-INSTANCE 'W:menu
-        :pop-up t
-     :dynamic t
-                                    :superior W:mouse-sheet
-                                    :item-list-pointer 'display))
-  (SETQ *menupane* (SEND SELF :get-pane 's-m-pane))
-  (SEND *menupane* :set-item-list-pointer 'system-menu)
-  (SEND *menupane* :update-item-list)
-  (SETQ *interaction* (FUNCALL self :get-pane 'i-pane)
-      *output-window* (FUNCALL self :get-pane 'o-pane))
-  (SEND self :set-selection-substitute rtms:*interaction*)
-  )
-;**************************************************************************
-;  Build the submenus.                       *
-;**************************************************************************
-(UCL:BUILD-MENU 'system-menu 'dbms-rc
-:item-list-order '(help kill command-menu exit display))
-(UCL:BUILD-MENU 'help 'dbms-rc :item-list-order
-'(introduction inspect-dbms-object))
-(UCL:BUILD-MENU 'display 'dbms-rc :item-list-order
-'(scroll-to-top scroll-backward clear-output-window
-  send-output-to-file
-  scroll-to-a-relation ucl:display-command-tables
-  ucl:edit-command-tables scroll-forward scroll-to-bottom))
-(PUTPROP 'command-menu '(dbms-comtab) 'ucl:items)
-(UCL:BUILD-MENU 'command-menu 'dbms-rc
-:item-list-order
-'(define-database define-relation define-view define-attribute
-  define-index define-environment define-domain define-transaction
-  define-implementation define-storage-structure
-  attach-relation detach-relation
-  load-database load-relation load-environment
-  insert-tuples delete-tuples modify-tuples
-  modify-database modify-relation modify-attribute
-  modify-index modify-domain modify-transaction modify-view
-                  destroy-database destroy-relation destroy-attribute
-  destroy-domain destroy-implementation destroy-index
-  destroy-storage-structure destroy-view
-  retrieve-tuples join union intersection difference
-  select project commit-transaction
-  average sum size count maximum minimum
-  print-relation save-database save-relation
-  save-environment save-transaction maptuple mapt
-  active-database environment-status
-  rename-attribute rename-relation
-  rename-database abort-transaction
-  begin-transaction end-transaction)
-:column-list-order
-'(("Definition" :FONT FONTS:hl12bi)
-  ("Manipulation" :FONT FONTS:hl12bi)
-  ("Operators" :FONT FONTS:hl12bi)
-  ("Other Features" :FONT FONTS:hl12bi)))
-;**************************************************************************
-;         Define the variable to hold the instance of the application flavor.      *
-;**************************************************************************
-(SETQ dbms-frame1 nil)
-;**************************************************************************
-;         Method used to get input from submenus.                                  *
-;**************************************************************************
-(DEFMETHOD (dbms-rc :submenu-choose) (submenu)
-  (LET ((sup (SEND submenu :superior)))
-    (UNWIND-PROTECT
-      (PROGN
-(SEND (CAR (SEND *interaction* :blinker-list)) :set-visibility NIL)
-(SEND submenu :set-superior W:mouse-sheet)
-(SEND submenu :choose))
-      (SEND submenu :set-superior sup)
-      (SEND (CAR (SEND *interaction* :blinker-list)) :set-visibility :blink)
-      )))
-;**************************************************************************
-;                              Some initializations                                *
-;**************************************************************************
-(DEFMETHOD (dbms-rc :before :command-loop) ()
-    (SETQ *typeout-window* (FUNCALL *output-window* :typeout-window))
-    (SEND *interaction* :clear-screen)
-    (SEND *output-window* :clear-screen)
-    (SEND *typeout-window* :set-io-buffer
-  (SEND *interaction* :io-buffer)))
-;**************************************************************************
-;    Method to be executed before each time it enters the command-loop. Used       *
-;    to refresh the output window if its typeout window is exposed.                *
-;**************************************************************************
-
-(DEFMETHOD (dbms-rc :before :fetch-and-execute) (&rest ignore)
-  (DECLARE (SPECIAL ch))
-  (IF (SEND *typeout-window* :active-p)
-      (PROGN
-(FORMAT *typeout-window* "~%")
-(FORMAT *typeout-window* "~%")
-(FORMAT *typeout-window*
-w:*remove-typeout-standard-message*)   ;mrr 04.07.87
-(SETQ ch (FUNCALL dbms-frame1 :any-tyi))
-(SEND *output-window* :flush-typeout))))
-;(SEND dbms-frame1 :set-basic-help '(help))
-;(SEND dbms-frame1 :set-print-function 'NEW-PRINT)
-(DEFUN NEW-PRINT (x &AUX ch)
-  (IF (SEND *typeout-window* :active-p)
-      (PROGN
-(FORMAT *typeout-window* "~%")
-(FORMAT *typeout-window* "~%")
-(FORMAT *typeout-window*
-w:*remove-typeout-standard-message*)   ;mrr 04.07.87
-(SETQ ch (FUNCALL dbms-frame1 :any-tyi))
-(SEND *output-window* :flush-typeout)))
-  (SEND *output-window* :append-item (FORMAT nil "~S" x)))
-(DEFMETHOD (dbms-rc :before :execute-command) (&rest ignore)
-;  (setq ucl:inhibit-results-print? T)
-  (IF (EQ ucl:input-mechanism 'ucl:typein)
-      (SEND *output-window* :append-item (FORMAT nil "~S" -))))
-(DEFMETHOD (dbms-rc :after :execute-command) (&rest ignore &AUX ch)
-  (IF (SEND *typeout-window* :active-p)
-      (PROGN
-(FORMAT *typeout-window* "~%")
-(FORMAT *typeout-window* "~%")
-(FORMAT *typeout-window*
-w:*remove-typeout-standard-message*)   ;mrr
-(SETQ ch (FUNCALL dbms-frame1 :any-tyi))
-(SEND *output-window* :flush-typeout)))
-  '(MAPC #'(LAMBDA (val)
-    (IF val
-(PROGN
-  (SEND *output-window* :append-item (FORMAT NIL "~S" val))
-  (SEND *output-window* :put-last-item-in-window))))
-//)
-  )
-
-;**************************************************************************
-;      Sets the I/O streams the appropriate panes in the interface.                *
-;**************************************************************************
-(DEFMETHOD (dbms-rc :designate-io-streams) ()
-  (DECLARE (special *standard-output* error-output debug-io
-    *terminal-io*))
-  (SETQ *terminal-io* *interaction*
-*standard-output* *interaction*
-error-output *typeout-window*
-debug-io *typeout-window*))
-;**************************************************************************
-;      The function to be called from lisp-listener to get use the interface.      *
-;**************************************************************************
-(COMPILE-FLAVOR-METHODS dbms-rc)
-(DEFUN Interface (&rest ignore)
-  (IF (W:FIND-WINDOW-OF-FLAVOR 'RTMS:dbms-rc)
-      dbms-frame1
-    (SETQ dbms-frame1 (W:MAKE-WINDOW 'RTMS:dbms-rc)))
-  (SEND dbms-frame1 :expose)
-  (SEND *interaction* :select))
-;**************************************************************************
-;             Add the database interface to the system keys and system menu      *
-;**************************************************************************
-(DEFUN CREATE-KEYS ()
-  (W:ADD-SYSTEM-KEY #\D 'RTMS:dbms-rc
-     "Rtms Interface"
-     '(RTMS:interface))
-  (W:ADD-TO-SYSTEM-MENU-COLUMN :PROGRAMS
-    "RTMS" '(RTMS:interface) "Rtms interface"))
-(CREATE-KEYS)
-;**************************************************************************
-;              Function used to scroll down in the output window.                  *
-;**************************************************************************
-(DEFUN scroll-to-bottom ()
-  (SEND *output-window* :append-item " ")
-  (SEND *output-window* :put-last-item-in-window)
-  (FUNCALL *OUTPUT-WINDOW* :SCROLL-TO
-   (- (W:SHEET-NUMBER-OF-INSIDE-LINES *OUTPUT-WINDOW*) 2)
-   :RELATIVE))
-;**************************************************************************
-;           Function used to print items in the output window.                     *
-;**************************************************************************
-(DEFUN DBMS-PRINTER (line arg stream item-no)
-  (LET (item)  ;item was declared special locally in Rel 2 -mrr
-  arg
-  item-no
-  (COND ((STRINGP line) (PRINC line stream))
-((NUMBERP line) (PRINC line stream))
-((SYMBOLP line) (PRINC line stream))
-((LISTP line)
-   (DOLIST (element line)
-     (COND ((STRINGP element) (PRINC element stream))
-   ((SYMBOLP element) (PRINC element stream))
-   ((NUMBERP element) (PRINC element stream))
-   ((NULL (LISTP element)) nil)
-   ((NULL (EQUAL (CAR element) :item1))
-    (IF (STRINGP (CAR element))
-(PRINC (CAR element) stream)
-(PRIN1 (CAR element) stream)))
-   (T (SETQ item (CADR element))
-      (FUNCALL stream :item1 item (CADDR element)
-       #'(LAMBDA (item stream)
-    (PRINC
-      (IF (LISTP item)
-   (CAR item)
-        item)
-      stream))))))))))
-;**************************************************************************
-;               Functions used to provide help on line-area scrolling.            *
-;**************************************************************************
-(DEFUN HELP-LINE-AREA (line &AUX item)
-  (COND ((OR (STRINGP line)
-     (NUMBERP line)
-     (SYMBOLP line))
- (PRINC line *TYPEOUT-WINDOW*))
-((LISTP line)
-   (DOLIST (element line)
-     (COND ((OR (STRINGP element)
-(NUMBERP element)
-(SYMBOLP element))
-    (PRINC element *TYPEOUT-WINDOW*))
-   ((NULL (LISTP element)) nil)
-   ((NULL (EQUAL (CAR element) :item1))
-    (IF (STRINGP (CAR element))
-(PRINC (CADR element) *typeout-window*)
-(PRIN1 (CADR element) *typeout-window*)))
-   (T (SETQ item (CADR element))
-      (PRINC
-(IF (LISTP item)
-    (CADR item)
-  item)
-*TYPEOUT-WINDOW*)
-      )))
-   (FORMAT *typeout-window* "~%")
-   (FORMAT *typeout-window* "~%")
-   (FORMAT *typeout-window*
-w:*remove-typeout-standard-message*)   ;mrr 04.07.87
-   (SEND dbms-frame1 :any-tyi)
-   (SEND *output-window* :flush-typeout))))
-(DEFUN HELP-LINE-AREA-DEL (line &AUX items item-number mod-relation
-             mod-attributes num)
-  (SETQ item-number (SEND *output-window* :number-of-item line))
-  (MAPC (FUNCTION (LAMBDA (rel &AUX numbers)
-  (IF (AND
-(SETQ numbers (GETP (READ-FROM-STRING
-      (STRING-APPEND *pkg-name*
-       (CAR rel)))
-    'items))
-(>= item-number (CAR numbers))
-(<= item-number (CADR numbers))
-)
-      (PROGN
-(SETQ num numbers)
-(SETQ mod-relation (READ-FROM-STRING
-      (STRING-APPEND *pkg-name* (CAR rel))) ;mrr 04.06.87
-      mod-attributes (CADR rel))
-))))
-(QTRIEVE 'system-relation
- *system-relation-attributes*
- '(relation-name attributes)
- *system-relation-key*
- t))
-  (IF mod-relation
-      (PROGN
-(IF (W:MOUSE-CONFIRM "Delete the indicated tuple?")
-    (PROGN
-      (DOLIST (element line)
-(IF (LISTP element)
-    (SETQ items (APPEND items (CDR element)))))
-      (IF (>
-    (CADR
-      (MULTIPLE-VALUE-LIST
-      (DELETE-TUPLES mod-relation
-      'where (CONS 'AND
-    (MAPCAR (FUNCTION (LAMBDA (attr val)
-       (LIST 'EQUAL (READ-FROM-STRING (STRING attr))
-      `(QUOTE
-         ,(READ-FROM-STRING val)))))
-     mod-attributes
-     items)))))
-    0)
-  (PROGN
-    (SEND *output-window* :delete-item item-number)
-    (PUTP mod-relation
-     (LIST (CAR num) (- (CADR num) 1))
-     'items)))
-      )))))
-(DEFUN HELP-LINE-AREA-MOD (line
-   &AUX items item-number attribute-vars mod-tuple
-   mod-relation mod-attributes blanks tuple-format tuple)
-  (BLOCK nil
-  (SETQ item-number (SEND *output-window* :number-of-item line))
-  (MAPC (FUNCTION (LAMBDA (rel &AUX numbers)
-  (IF (AND
-(SETQ numbers (GETP (READ-FROM-STRING
-      (STRING-APPEND *pkg-name*
-       (CAR rel)))
-    'items))
-(>= item-number (CAR numbers))
-(<= item-number (CADR numbers))
-)
-      (SETQ mod-relation (READ-FROM-STRING     ;mrr 04.06.87
-      (STRING-APPEND *pkg-name* (CAR rel)))
-    mod-attributes (CADR rel)))))
-(QTRIEVE 'system-relation
- *system-relation-attributes*
- '(relation-name attributes)
- *system-relation-key*
- t))
-  (IF mod-relation
-      (PROGN
-(DOLIST (element line)
-  (IF (LISTP element)
-      (PROGN
-(SETQ tuple-format (APPEND tuple-format
-     (LIST (LENGTH (CAR element)))))
-(SETQ items (APPEND items (CDR element))))))
-(SETQ blanks
-      (MAKE-ARRAY
-(+ 1 (LENGTH mod-attributes)
-   (APPLY (FUNCTION +) tuple-format)) :type 'art-string
-:initial-value 32))
-(SETQ attribute-vars
-      (MAPCAR (FUNCTION (LAMBDA (attr)
-       (READ-FROM-STRING (STRING-APPEND "MOD" attr))))
-      mod-attributes))
-(MAPC (FUNCTION (LAMBDA (attr val)
-                  (SET attr (READ-FROM-STRING val))))
-      attribute-vars
-      items)
-(SETQ *line-area-values-modifiedp* nil)
-(IF (CATCH 'abort
-      (W:CHOOSE-VARIABLE-VALUES
-(MAPCAR (FUNCTION (LAMBDA (var attr)
-     (LIST var (STRING attr))))
-attribute-vars
-mod-attributes)
-:label (FORMAT nil "Modify the relation: ~S" mod-relation)
-:function 'line-area-domain-check
-:margin-choices '("Do It" ("Abort" (THROW 'abort T)))))        ;mrr 04.06.87
-    (setq  *line-area-values-modifiedp* NIL))
-(IF *line-area-values-modifiedp*
-    (PROGN
-      (SETQ tuple (MAPCAR (FUNCTION (LAMBDA (x)
-        `(QUOTE ,(SYMBOL-VALUE x))))
-   attribute-vars))
-      (SETQ mod-tuple
-    (CAR (PRINT-TUPLE (LIST
-  (MAPCAR (FUNCTION (LAMBDA (x)
-        (eval `,x)))
-   tuple))
-       tuple-format nil T blanks nil)))
-      (IF (>
-    (CADR
-      (MULTIPLE-VALUE-LIST
-      (MODIFY mod-relation 'attributes mod-attributes
-'values tuple
-'where (CONS 'AND
-        (MAPCAR (FUNCTION (LAMBDA (attr val)
-      (LIST 'EQUAL (READ-FROM-STRING
-       (STRING-APPEND *pkg-name*    ;mrr
-        (STRING attr)))
-     `(QUOTE
-        ,(READ-FROM-STRING
-           val)))))
-         mod-attributes
-         items)))))
-    0)
-  (PROGN
-     (SEND *output-window* :delete-item item-number)
-    (SEND *output-window* :insert-item item-number mod-tuple)))))))))
-(DEFUN line-area-domain-check (&rest ignore)
-  (BLOCK nil
-;Later on, we will have to take the arguments window, variable, old-value, and
-;new-value (see page 195. bottom) inorder to do the domain check for this attribute
-;But we probably should not do the domain checking here because it will be done
-;anyway in the modify routine.
-(SETQ *line-area-values-modifiedp* T)
-(RETURN nil)))
-
-
-(DEFUN HELP-MODIFY (relation &rest ignore
-    &AUX qtrieve)
-  (DECLARE (SPECIAL new-rel relation
-    old-att  new-add new-del new-ren old-add old-del old-ren
-    old-imp  new-imp
-    old-sto  new-sto
-    old-key  new-key
-    old-dir  new-dir
-    old-doc  new-doc
-    old-tup  new-tup))
-  (BLOCK nil
-    (SETQ qtrieve (CADR (GET-RELATION
-relation
-'(attributes save-directory doc tuple-format
-  implementation-type storage-structure key)
-T)))
-    (COND ((NULL (CADR qtrieve))
-   (IF *provide-error-messages*
-       (FORMAT *STANDARD-OUTPUT*
-     "~%ERROR - Relation ~s does not exist in the database ~s"
-     relation *active-db*))
-   (RETURN NIL)))
-  (SETQ old-att (FIRST qtrieve)
-old-dir (SECOND qtrieve)
-old-doc (THIRD qtrieve)
-old-tup (FOURTH qtrieve)
-old-imp (FIFTH qtrieve)
-old-sto (SIXTH qtrieve)
-old-key (SEVENTH qtrieve) old-add NIL old-del NIL old-ren NIL)
-  (SETQ new-dir old-dir new-doc old-doc new-rel relation
-new-tup old-tup new-imp old-imp new-sto old-sto new-key old-key
-new-add old-add new-del old-del new-ren old-ren)
-  (IF (NOT (CATCH 'abort
-     (W:CHOOSE-VARIABLE-VALUES
-       `(
- (new-rel "Relation Name"
-  :documentation "To change the relation name." :SEXP)
- ,(FORMAT nil "     Attributes: ~S" old-att)
- (new-add "Add attributes"
-  :documentation "To add attributes specify attribute descriptor pair." :SEXP)
- (new-del "Delete attributes"
-  :documentation "To delete attributes, specify a list of the attributes." :SEXP)
- (new-ren "Rename attributes"
-  :documentation "To rename attributes, specify a list of the type <(old new)>." :SEXP)
- " "
- (new-imp "Implementation-type"
-  :documentation "To change the type of implementation."
-  :SEXP)
- (new-sto "Storage Structure"
-  :documentation
-  "To change the type of storage structure." :SEXP)
- (new-key "Key"
-  :documentation "To change the key attributes."
-  :SEXP)
- (new-doc "Documentation"
-  :documentation "To change the relation documentation."
-  :SEXP)
- (new-dir "Save Directory"
-  :documentation
-  "To change the directory in which this relation can be saved."
-  :SEXP)
- (new-tup "Tuple format"
-  :documentation
-  "To change the format in printing the relation."
-  :SEXP))
-       :label (FORMAT nil "Change the features of ~S" relation)
-       :margin-choices '("Do It" ("Abort" (THROW 'abort T))))))       ;mrr 04.06.87
-      (PROGN
-(SETQ qtrieve NIL)
-(MAPC #'(LAMBDA (old new key)
-  (IF (NOT (EVAL `(*EQUALP ,old ,new)))
-      (SETQ qtrieve (APPEND qtrieve (LIST key (eval `,new))))))
-      '(relation old-add old-del old-ren
- old-dir old-doc old-tup old-imp old-sto old-key)
-      '(new-rel new-add new-del new-ren
-new-dir new-doc new-tup new-imp new-sto new-key)
-      '(rel add-attr delete-attr rename-attr dir doc format imp sto key))
-(IF qtrieve
-    (MODIFY-RELATION relation qtrieve)))))
- )
-
-me of the database to be loaded."
-      :sexp))
-   (:label "Directory Name:"
-    :default *ui-directory*
-    :type (
-      :documentation "Name of the directory in which it is stored."
-      :sexp))
- :label "Give parameters for LOAD DATABASE:")
-      :menus ((command-menu :COLUMN "Definition"))
-      :documentation "Used to load database from a given directory."
-      :keys ((#\SUPER-L #\SUPER-D)))
-  (SEND *output-window*
-:append-item
-(FORMAT nil "~S"
-(LIST 'LOAD-DATABASE database (LIST 'dir directory))))
-  (LOAD-DATABASE database (LIST 'dir directory)))
-;**************************************************************************
-;                DEFCOMMAND  FOR RESTORE ENVIRONMENT                               *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC load-environment) (environment directory)
-`(:description ,(STRING-APPEND (DOCUMENTATION 'load-environment)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'load-environment
-        (ARGLIST
-          'load-environment))))
-      :arguments (:user-supplied (:label "Environment Name:"
-    :default *ui-database*
-    :type (
-      :documentation "Name of the environment to be loaded."
-      :sexp))
-   (:label "Directory Name:"
-    :default *ui-directory*
-    :type (
-      :documentation "Name of the directory in which it is stored."
-      :sexp))
- :label "Give parameters for LOAD ENVIRONMENT:")
-      :menus ((command-menu :COLUMN "Definition"))
-      :documentation "Used to load environment from a given directory."
-      :keys ((#\SUPER-L #\SUPER-E)))
-  (SEND *output-window*
-:append-item
-(FORMAT nil "~S"
-(LIST 'LOAD-ENVIRONMENT environment (LIST 'dir directory))))
-  (LOAD-ENVIRONMENT environment (LIST 'dir directory)))
-;**************************************************************************
-;                DEFCOMMAND  FOR RESTORE RELATION                                  *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC load-relation) (relation directory)
-    `(:description ,(STRING-APPEND (DOCUMENTATION 'load-relation)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'load-relation
-        (ARGLIST
-          'load-relation))))
-      :arguments (:user-supplied (:label "Relation Name:"
-    :default *ui-relation*
-    :type (
-      :documentation "Name of the relation to be loaded."
-      :sexp))
-   (:label "Directory Name:"
-    :default *ui-directory*
-    :type (
-      :documentation "Name of the directory in which it is saved."
-                :sexp))
-  :label "Give parameters for LOAD RELATION:")
-      :menus ((command-menu :COLUMN "Definition"))
-      :documentation "Used to load a relation from a given directory."
-      :keys ((#\SUPER-L #\SUPER-R)))
-  (SEND *output-window*
-:append-item
-(FORMAT nil "~S"
-(LIST 'LOAD-RELATION relation (LIST 'dir directory))))
-  (LOAD-RELATION relation (LIST 'dir directory)))
-;**************************************************************************
-;                DEFCOMMAND  FOR SAVE DATABASE                                     *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC save-database) (database directory)
-    `(:description ,(STRING-APPEND (DOCUMENTATION 'save-database)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'save-database
-        (ARGLIST
-          'save-database))))
-      :arguments (:user-supplied (:label "Database Name:"
-    :default *ui-database*
-    :type (:documentation
-       "Name of the database to be saved."
-      :sexp))
-   (:label "Directory Name:"
-    :default *ui-directory*
-    :type (:documentation
-      "Name of the directory to write to."
-      :sexp))
-  :label "Give parameters for SAVE DATABASE:")
-      :menus ((command-menu :COLUMN "Other Features"))
-      :documentation "Used to save a database on a given directory."
-      :keys ((#\SUPER-S #\HYPER-D)))
-  (SEND *output-window*
-:append-item
-(FORMAT nil "~S"
-(LIST 'SAVE-DATABASE database (LIST 'dir directory))))
-  (SAVE-DATABASE database (LIST 'dir directory)))
-;**************************************************************************
-;                DEFCOMMAND  FOR SAVE ENVIRONMENT                                  *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC save-environment) (environment directory)
-    `(:description ,(STRING-APPEND (DOCUMENTATION 'save-environment)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'save-environment
-        (ARGLIST
-          'save-environment))))
-      :arguments (:user-supplied (:label "Environment Name:"
-    :default nil
-    :type (:documentation
-       "Name of the environment to be saved."
-      :sexp))
-   (:label "Directory Name:"
-    :default *ui-directory*
-    :type (:documentation
-      "Name of the directory to write to."
-      :sexp))
-  :label "Give parameters for SAVE environment:")
-      :menus ((command-menu :COLUMN "Other Features"))
-      :documentation "Used to save an environment on a given directory."
-      :keys ((#\SUPER-S #\SUPER-E)))
-  (SEND *output-window*
-:append-item
-(FORMAT nil "~S"
-(LIST 'SAVE-ENVIRONMENT environment (LIST 'dir directory))))
-  (SAVE-ENVIRONMENT environment (LIST 'dir directory)))
-;**************************************************************************
-;                DEFCOMMAND  FOR SAVE RELATION                                     *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC save-relation) (relation directory type save
-     &AUX keywords)
-    `(:description ,(STRING-APPEND (DOCUMENTATION 'save-relation)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'save-relation
-        (ARGLIST
-          'save-relation))))
-      :arguments (:user-supplied (:label "Relation Name:"
-    :default *ui-relation*
-    :type (
-      :documentation "Name of the relation to be saved."
-      :sexp))
-   (:label "Directory Name:"
-    :default *ui-directory*
-    :type (
-      :documentation "Name of the directory to write to."
-      :sexp))
-   (:label "Type of SAVE:"
-    :default *ui-type*
-    :type (:documentation "Save type. It can be either XLD or COMMAND." ;mrr 03.31.87
-     :sexp))
-   (:label "Must Save:"
-    :default nil
-    :type (:documentation "Save the relation even if the relation has not been modified." :BOOLEAN))
- :label "Give parameters for SAVE RELATION:")
-      :menus ((command-menu :COLUMN "Other Features"))
-      :documentation "Used to save a relation on a given directory."
-      :keys ((#\SUPER-S #\SUPER-R)))
-  (SEND *output-window*
-:append-item
-(FORMAT nil "~S"
-(LIST 'SAVE-RELATION relation
-      (SETQ keywords (LIST 'type type 'dir directory
-     'save save)))))
-  (SAVE-RELATION relation keywords))
-;**************************************************************************
-;                DEFCOMMAND  FOR SAVE TRANSACTION                                  *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC save-transaction) (transaction directory pathname
-     &AUX keywords)
-    `(:description ,(STRING-APPEND (DOCUMENTATION 'save-transaction)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'save-transaction
-        (ARGLIST
-          'save-transaction))))
-      :arguments (:user-supplied (:label "Transaction Name:"
-    :default *ui-transaction*
-    :type (
-      :documentation "Name of the transaction to be saved."
-      :sexp))
-   (:label "Directory Name:"
-    :default *ui-directory*
-    :type (
-      :documentation "Name of the directory to write to."
-      :sexp))
-   (:label "Pathname:"
-    :default *ui-file*
-    :type (:documentation
-     "The name of the file into which the transaction forms will be stored. It defaults to <transaction>.lisp"
-     :SEXP))
- :label "Give parameters for SAVE TRANSACTION:")
-      :menus ((command-menu :COLUMN "Other Features"))
-      :documentation "Used to save a transaction on a given directory."
-      :keys ((#\SUPER-S #\SUPER-T)))
-  (SEND *output-window*
-:append-item
-(FORMAT nil "~S"
-(LIST 'SAVE-TRANSACTION transaction
-      (SETQ keywords (LIST 'path pathname 'dir directory)))))
-  (SAVE-TRANSACTION transaction keywords))
-
-;**************************************************************************
-;                DEFCOMMAND  FOR DEFINE IMPLEMENTATION                             *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC define-implementation) (implementation doc
-   &AUX keywords)
-    `(:description ,(STRING-APPEND (DOCUMENTATION 'define-implementation)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'define-implementation
-        (ARGLIST 'define-implementation))))
-      :arguments (:user-supplied (:label "Implementation Name:"
-    :default nil
-    :type (:documentation
-      "Name of the implementation. Implementation-dependent routines are expected to be defined by the user."
-      :sexp))
-   (:label "Documentation:"
-    :default *ui-doc*
-    :type (:documentation
-      "Documentation for the implementation."
-      :string))
-  :label "Give parameters for DEFINE IMPLEMENTATION:")
-      :menus ((command-menu :COLUMN "Definition"))
-      :documentation "Used to define an implementation."
-      :keys ((#\SUPER-D #\SUPER-I)))
-  (SEND *output-window*
-:append-item
-(FORMAT nil "~S"
-(LIST 'DEFINE-IMPLEMENTATION implementation
-      (SETQ keywords (LIST 'doc doc
-     )))))
-  (DEFINE-IMPLEMENTATION implementation keywords))
-;**************************************************************************
-;                DEFCOMMAND  FOR DEFINE INDEX                                      *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC define-index) (relation-name index-name key-attributes storage-structure priority
-  doc &AUX keywords)
-    `(:description ,(STRING-APPEND (DOCUMENTATION 'define-index)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'define-index
-        (ARGLIST 'define-index))))
-      :arguments (:user-supplied (:label "Relation Name:"
-    :default nil
-    :type (:documentation
-      "Name of the relation upon which the index will be defined."
-      :sexp))
-   (:label "Index Name:"
-    :default nil
-    :type (:documentation
-      "Name of the index to be defined."
-      :string))
-   (:label "Key Attributes:"
-    :default nil
-    :type (:documentation
-      "List of attribute names which form the key for this index."
-      :sexp))
-   (:label "Storage Structure:"
-    :default "AVL"
-    :type (:documentation
-      "The storage structure used to define the index."
-      :string))
-   (:label "Priority:"
-    :default 10
-    :type (:documentation
-      "A numerical value which indicates the priority given to this index. 1 is the highest priority."
-      :number))
-   (:label "Documentation:"
-    :default *ui-doc*
-    :type (:documentation
-      "Documentation for the index."
-      :string))
-  :label "Give parameters for DEFINE INDEX:")
-      :menus ((command-menu :COLUMN "Definition"))
-      :documentation "Used to define a secondary index on a relation."
-      :keys ((#\SUPER-D #\HYPER-I)))
-  (SEND *output-window*
-:append-item
-(FORMAT nil "~S"
-(LIST 'DEFINE-INDEX relation-name
-      (SETQ keywords (LIST 'name index-name 'key key-attributes 'sto storage-structure
-     'priority priority 'doc doc
-     )))))
-  (DEFINE-INDEX relation-name keywords))
-;**************************************************************************
-;                DEFCOMMAND  FOR MODIFY INDEX                                      *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC modify-index) (relation-name index-name new-index-name
-  key-attributes storage-structure priority
-  doc &AUX keywords)
-    `(:description ,(STRING-APPEND (DOCUMENTATION 'modify-index)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'modify-index
-        (ARGLIST 'modify-index))))
-      :arguments (:user-supplied (:label "Relation Name:"
-    :default nil
-    :type (:documentation
-      "Name of the relation upon which the index to be modified is defined."
-      :sexp))
-   (:label "Index Name:"
-    :default nil
-    :type (:documentation
-      "Name of the index to be modified."
-      :string))
-   (:label "New Index Name:"
-    :default nil
-    :type (:documentation
-      "New name of the index."
-      :string))
-   (:label "Key Attributes:"
-    :default nil
-    :type (:documentation
-      "List of attribute names which form the key for this index."
-      :sexp))
-   (:label "Storage Structure:"
-    :default nil
-    :type (:documentation
-      "The storage structure used to define the index."
-      :string))
-   (:label "Priority:"
-      :default 10
-    :type (:documentation
-      "A numerical value which indicates the priority given to this index. 1 is the highest priority."
-      :number))
-   (:label "Documentation:"
-    :default *ui-doc*
-    :type (:documentation
-      "Documentation for the index."
-      :string))
-  :label "Give parameters for DEFINE INDEX:")
-      :menus ((command-menu :COLUMN "Manipulation"))
-      :documentation "Used to define a secondary index on a relation."
-      :keys ((#\SUPER-M #\HYPER-I)))
-  (SEND *output-window*
-:append-item
-(FORMAT nil "~S"
-(LIST 'MODIFY-INDEX relation-name index-name
-      (SETQ keywords (LIST 'new-name new-index-name 'key key-attributes 'sto storage-structure
-     'priority priority 'doc doc
-     )))))
-  (MODIFY-INDEX relation-name index-name keywords))
-;**************************************************************************
-;                DEFCOMMAND  FOR DEFINE STORAGE-STRUCTURE                          *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC define-storage-structure) (storage-structure doc
-   &AUX keywords)
-    `(:description ,(STRING-APPEND (DOCUMENTATION 'define-storage-structure)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'define-storage-structure
-        (ARGLIST 'define-storage-structure))))
-      :arguments (:user-supplied (:label "Storage structure name:"
-    :default nil
-    :type (:documentation
-      "Name of the storage structure. Storage-structure-dependent routines are expected to be defined by the user."
-      :sexp))
-   (:label "Documentation:"
-    :default nil
-    :type (:documentation
-      "Documentation for the storage structure."
-      :string))
-  :label "Give parameters for DEFINE STORAGE STRUCTURE:")
-      :menus ((command-menu :COLUMN "Definition"))
-      :documentation "Used to define a storagestructure."
-      :keys ((#\SUPER-D #\SUPER-S)))
-  (SEND *output-window*
-:append-item
-(FORMAT nil "~S"
-(LIST 'DEFINE-STORAGE-STRUCTURE storage-structure
-      (SETQ keywords (LIST 'doc doc
-     )))))
-  (DEFINE-STORAGE-STRUCTURE storage-structure keywords))
-;**************************************************************************
-;                DEFCOMMAND  FOR DEFINE DOMAIN                                     *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC define-domain) (domain def doc format
-   &AUX keywords)
-    `(:description ,(STRING-APPEND (DOCUMENTATION 'define-domain)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'define-domain
-        (ARGLIST 'define-domain))))
-      :arguments (:user-supplied (:label "Domain Name:"
-    :default nil
-    :type (:documentation
-      "Name of the domain. Domain predicate is expected to be defined prior to this."
-      :sexp))
-   (:label "Default value:"
-    :default nil
-    :type (:documentation
-     "Default value for this domain."
-     :sexp))
-   (:label "Documentation:"
-    :default nil
-    :type (:documentation
-      "Documentation for the domain."
-      :string))
-   (:label "Default width :"
-    :default nil
-    :type (:documentation
-      "The default width to be used for this domain."
-      :sexp))
-  :label "Give parameters for DEFINE DOMAIN:")
-      :menus ((command-menu :COLUMN "Definition"))
-      :documentation "Used to define a domain."
-      :keys (#\SUPER-HYPER-D))
-  (SEND *output-window*
-:append-item
-(FORMAT nil "~S"
-(LIST 'DEFINE-DOMAIN domain
-      (SETQ keywords (LIST 'default def
-     'doc doc
-     'format format)))))
-  (DEFINE-DOMAIN domain keywords))
-;**************************************************************************
-;                DEFCOMMAND  FOR MODIFY DOMAIN                                     *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC modify-domain) (domain def doc format
-   &AUX keywords)
-    `(:description ,(STRING-APPEND (DOCUMENTATION 'modify-domain)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'modify-domain
-        (ARGLIST 'modify-domain))))
-      :arguments (:user-supplied (:label "Domain Name:"
-    :default nil
-    :type (:documentation
-      "Name of the domain to be modified."
-      :sexp))
-   (:label "Default value:"
-    :default nil
-    :type (:documentation
-     "New default value for this domain."
-     :sexp))
-   (:label "Documentation:"
-    :default nil
-    :type (:documentation
-      "New documentation for the domain."
-      :string))
-   (:label "Default width :"
-    :default nil
-    :type (:documentation
-      "The new default width to be used for this domain."
-      :sexp))
-  :label "Give parameters for MODIFY DOMAIN:")
-      :menus ((command-menu :COLUMN "Manipulation"))
-      :documentation "Used to modify a domain."
-      :keys ((#\SUPER-M #\SUPER-D)))
-  (SEND *output-window*
-:append-item
-(FORMAT nil "~S"
-  (LIST 'MODIFY-DOMAIN domain
-      (SETQ keywords (LIST 'default def
-     'doc doc
-     'format format)))))
-  (MODIFY-DOMAIN domain keywords))
-;**************************************************************************
-;                DEFCOMMAND  FOR DEFINE TRANSACTION                                *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC define-transaction) (transaction forms dir path
-      &AUX keywords)
-    `(:description ,(STRING-APPEND (DOCUMENTATION 'define-transaction)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'define-transaction
-        (ARGLIST 'define-transaction))))
-      :arguments (:user-supplied (:label "Transaction Name:"
-    :default *ui-transaction*
-    :type (:documentation
-      "Name of the transaction."
-      :sexp))
-   (:label "Database calls:"
-    :default nil
-    :type (:documentation
-     "A list of database calls."
-     :sexp))
-   ,*ucl-dir*
-   (:label "Pathname :"
-    :default *ui-file*
-    :type (:documentation
-      "The default file in which it will be saved."
-      :SEXP))
-  :label "Give parameters for DEFINE TRANSACTION:")
-      :menus ((command-menu :COLUMN "Definition"))
-      :documentation "Used to define a transaction."
-      :keys ((#\SUPER-D #\SUPER-T)))
-  (SEND *output-window*
-:append-item
-(FORMAT nil "~S"
-(LIST 'DEFINE-TRANSACTION transaction forms
-      (SETQ keywords (LIST 'dir dir
-     'path path)))))
-  (DEFINE-TRANSACTION transaction forms keywords))
-;**************************************************************************
-;                DEFCOMMAND  FOR MODIFY TRANSACTION                                *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC modify-transaction) (transaction dir path
-      &AUX keywords)
-    `(:description ,(STRING-APPEND (DOCUMENTATION 'modify-transaction)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'modify-transaction
-        (ARGLIST 'modify-transaction))))
-      :arguments (:user-supplied (:label "Transaction Name:"
-    :default *ui-transaction*
-    :type (:documentation
-      "Name of the transaction to be modified."
-      :sexp))
-   (:label "Directory:"
-    :default *ui-directory*
-    :type (:documentation
-      "Default directory in which it can be found, if not in memory."
-      :SEXP))
-   (:label "Pathname :"
-    :default *ui-file*
-    :type (:documentation
-      "The default file in which it can be found, if not in memory."
-      :SEXP))
-  :label "Give parameters for MODIFY TRANSACTION:")
-      :menus ((command-menu :COLUMN "Manipulation"))
-      :documentation "Used to modify a transaction."
-      :keys ((#\SUPER-M #\SUPER-T)))
-  (SEND *output-window*
-:append-item
-(FORMAT nil "~S"
-(LIST 'MODIFY-TRANSACTION transaction
-      (SETQ keywords (LIST 'dir dir
-     'path path)))))
-  (MODIFY-TRANSACTION transaction keywords))
-;**************************************************************************
-;                DEFCOMMAND  FOR DEFINE DATABASE                                   *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC define-database) (database directory doc env
-     &AUX keywords)
-    `(:description ,(STRING-APPEND (DOCUMENTATION 'define-database)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'define-database
-        (ARGLIST 'define-database))))
-      :arguments (:user-supplied (:label "Database Name:"
-    :default nil
-    :type (:documentation
-      "Name of the database."
-      :sexp))
-   (:label "Directory Name:"
-    :default *ui-directory*
-    :type (:documentation
-     "Name of the save directory for this database."
-     :sexp))
-   (:label "Documentation:"
-    :default *ui-doc*
-    :type (:documentation
-      "Documentation for the database."
-      :string))
-   (:label "Environment:"
-    :default nil
-    :type (:documentation
-      "Name of the environment to be used to replace the default settings."
-      :sexp))
-  :label "Give parameters for DEFINE DATABASE:")
-      :menus ((command-menu :COLUMN "Definition"))
-      :documentation "Used to define a database in a given directory."
-      :keys ((#\SUPER-D #\SUPER-D)))
-  (SEND *output-window*
-:append-item
-(FORMAT nil "~S"
-(LIST 'DEFDB database
-      (SETQ keywords (LIST 'dir directory
-     'doc doc
-     'environment env)))))
-  (DEFDB database keywords))
-;**************************************************************************
-;                DEFCOMMAND  FOR MODIFY DATABASE                                   *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC modify-database) (database new-database directory doc
-     &AUX keywords)
-    `(:description ,(STRING-APPEND (DOCUMENTATION 'modify-database)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'modify-database
-        (ARGLIST 'modify-database))))
-      :arguments (:user-supplied (:label "Database Name:"
-    :default nil
-    :type (:documentation
-      "Name of the database."
-      :sexp))
-   (:label "New Database Name:"
-    :default nil
-    :type (:documentation
-      "If the database is to be renamed specify the new name."
-      :sexp))
-   (:label "Directory Name:"
-    :default NIL
-    :type (:documentation
-     "To change the save directory for this database specify a new directory."
-     :sexp))
-   (:label "Documentation:"
-    :default NIL
-    :type (:documentation
-      "New documentation for the database."
-      :string))
-  :label "Give parameters for MODIFY DATABASE:")
-      :menus ((command-menu :COLUMN "Manipulation"))
-      :documentation "Used to modify the features a database."
-      :keys ((#\SUPER-M #\HYPER-D)))
-  (SEND *output-window*
-:append-item
-(FORMAT nil "~S"
-(LIST 'MODIFY-DATABASE database
-      (SETQ keywords (LIST 'database-name new-database
-      'dir directory
-     'doc doc
-     )))))
-  (MODIFY-DATABASE database keywords))
-;**************************************************************************
-;                DEFCOMMAND  FOR MODIFY ATTRIBUTE                                  *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC modify-attribute) (relation attr new-attr def doc format
-     &AUX keywords)
-    `(:description ,(STRING-APPEND (DOCUMENTATION 'modify-attribute)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'modify-attribute
-        (ARGLIST 'modify-attribute))))
-      :arguments (:user-supplied (:label "Relation Name:"
-    :default *ui-relation*
-    :type (:documentation
-      "Name of the relation."
-      :sexp))
-   (:label "Attribute Name:"
-    :default nil
-    :type (:documentation
-      "Name of the attribute."
-      :sexp))
-   (:label "New Attribute Name:"
-    :default nil
-    :type (:documentation
-      "If the attribute is to be renamed specify the new name."
-      :sexp))
-   (:label "Default Value:"
-    :default NIL
-    :type (:documentation
-     "To change the default value of this attribute specify a new value."
-     :sexp))
-   (:label "Documentation:"
-    :default NIL
-    :type (:documentation
-      "New documentation for the attribute."
-      :string))
-   (:label "Default width :"
-    :default nil
-    :type (:documentation
-      "The new default width to be used for this attribute."
-      :sexp))
-  :label "Give parameters for MODIFY ATTRIBUTE:")
-      :menus ((command-menu :COLUMN "Manipulation"))
-      :documentation "Used to modify the features a attribute."
-      :keys ((#\SUPER-M #\SUPER-A)))
-  (SEND *output-window*
-:append-item
-(FORMAT nil "~S"
-(LIST 'MODIFY-ATTRIBUTE relation attr
-      (SETQ keywords (LIST 'attribute-name new-attr
-     'def def
-     'doc doc 'format format
-     )))))
-  (MODIFY-ATTRIBUTE relation attr keywords))
-;**************************************************************************
-;                DEFCOMMAND  FOR MODIFY VIEW *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC modify-view) (view def doc
-     &AUX keywords)
-    `(:description ,(STRING-APPEND (DOCUMENTATION 'modify-view)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'modify-view
-        (ARGLIST 'modify-view))))
-      :arguments (:user-supplied (:label "View Name:"
-    :default NIL
-    :type (:documentation
-      "Name of the view."
-      :sexp))
-   (:label "View Definition:"
-    :default nil
-    :type (:documentation
-      "New definition of the view."
-      :sexp))
-   (:label "Documentation:"
-    :default NIL
-    :type (:documentation
-      "New documentation for the view."
-      :string))
-  :label "Give parameters for MODIFY VIEW:")
-      :menus ((command-menu :COLUMN "Manipulation"))
-      :documentation "Used to modify the features a view."
-      :keys ((#\SUPER-M #\SUPER-V)))
-  (SEND *output-window*
-:append-item
-(FORMAT nil "~S"
-(LIST 'MODIFY-VIEW view
-      (SETQ keywords (LIST
-     'view-def def
-     'view-doc doc
-     )))))
-  (MODIFY-VIEW view keywords))
-;**************************************************************************
-;                DEFCOMMAND  FOR MODIFY RELATION                                   *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC modify-relation) (rel new-rel add-att del-att ren-att
-     imp sto format key dir doc
-     &AUX keywords)
-    `(:description ,(STRING-APPEND (DOCUMENTATION 'modify-relation)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'modify-relation
-        (ARGLIST 'modify-relation))))
-      :arguments (:user-supplied (:label "Relation Name:"
-    :default *ui-relation*
-    :type (:documentation
-      "Name of the Relation."
-      :sexp))
-   (:label "New Relation Name:"
-    :default nil
-    :type (:documentation
-      "If the relation is to be renamed specify the new name."
-      :sexp))
-   (:label "Add attributes:"
-    :default NIL
-    :type (:documentation
-     "Specify a list of attribute-descriptor pairs for attributes to be added to this relation."
-     :sexp))
-   (:label "Delete attributes:"
-    :default NIL
-    :type (:documentation
-     "Specify a list of attributes in this relation which are to be deleted."
-     :sexp))
-   (:label "Rename attributes:"
-    :default NIL
-    :type (:documentation
-     "To rename some of the attributes provide a list of the form (<old-attribute new-attribute>)."
-     :sexp))
-   (:label "Implementation Type:"
-    :default NIL
-    :type (:documentation
-     "To change the implementation type of this relation specify a new value."
-     :sexp))
-   (:label "Storage structure:"
-    :default NIL
-    :type (:documentation
-     "To change the storage structure of this relation specify a new value."
-     :sexp))
-   (:label "Format:"
-    :default NIL
-    :type (:documentation
-     "To change the format for this relation specify a new format as a list of values."
-     :sexp))
-   (:label "Key:"
-    :default NIL
-    :type (:documentation
-     "To change the key for this relation specify a new key as a list of attributes."
-     :sexp))
-   (:label "Directory Name:"
-    :default NIL
-    :type (:documentation
-        "To change the save directory for this relation specify a new directory."
-     :sexp))
-   (:label "Documentation:"
-    :default NIL
-    :type (:documentation
-      "New documentation for the relation."
-      :string))
-  :label "Give parameters for MODIFY RELATION:")
-      :menus ((command-menu :COLUMN "Manipulation"))
-      :documentation "Used to modify the features a relation."
-      :keys ((#\SUPER-M #\SUPER-R)))
-  (SEND *output-window*
-:append-item
-(FORMAT nil "~S"
-(LIST 'MODIFY-RELATION rel
-      (SETQ keywords (LIST 'relation new-rel
-     'add-attributes add-att
-     'delete-attributes del-att
-     'rename-attributes ren-att
-     'imp imp
-     'sto sto
-     'format format
-     'key key
-     'doc doc
-     'dir dir
-     )))))
-  (MODIFY-RELATION rel keywords))
-;**************************************************************************
-;                DEFCOMMAND  FOR DEFINE ENVIRONMENT                                *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC define-environment) (environment save dir err par-check
-        rel-imp rel-sto status sys-imp
-        sys-sto val-check warn
-        &AUX keywords)
-    `(:description ,(STRING-APPEND (DOCUMENTATION 'define-environment)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'define-environment
-        (ARGLIST 'define-environment))))
-      :arguments (:user-supplied (:label "Environment Name:"
-    :default nil
-    :type (:documentation
-      "Name of the environment."
-      :sexp))
-   (:label "Auto save:"
-    :default nil
-    :type (:documentation
-     "Automatically saves all the modified relations after each function." :boolean))
-   ,*ucl-dir*
-   (:label "Errors:"
-    :default T
-    :type (:documentation
-      "Controls the printing of the error messages."
-      :boolean))
-   (:label "Parameter Checking:"
-    :default T
-    :type (:documentation
-      "Controls the checking of the parameters."
-      :boolean))
-   (:label "Relation Implementation:"
-    :default *ui-imp*
-    :type (:documentation
-      "Default implementation of the user relations."
-      :sexp))
-   (:label "Relation storage structure:"
-    :default *ui-ss*
-    :type (:documentation
-      "Default storage structure for the user relations."
-      :sexp))
-   (:label "Status:"
-    :default T
-    :type (:documentation
-      "Controls the printing of the status messages."
-      :boolean))
-   (:label "System Implementation:"
-    :default nil
-    :type (:documentation
-      "Default implementation of the system relations. Can not change this when a database is active."
-      :sexp))
-   (:label "System storage structure:"
-    :default nil
-    :type (:documentation
-      "Default storage structure for the system relations. Can not change this when a database is active."
-      :sexp))
-   (:label "Validity Checking:"
-    :default T
-    :type (:documentation
-      "Controls the checking of the values during insertion and modification for validity."
-      :boolean))
-   (:label "Warnings:"
-    :default T
-     :type (:documentation
-      "Controls the printing of the warning messages."
-      :boolean))
-  :label "Give parameters for DEFINE ENVIRONMENT:")
-      :menus ((command-menu :COLUMN "Definition"))
-      :documentation "Used to define an environment in a given directory."
-      :keys ((#\SUPER-D #\SUPER-E)))
-  (SEND *output-window*
-:append-item
-(FORMAT nil "~S"
-(LIST 'DEFENV environment
-      (SETQ keywords (IF *active-db*
-   (LIST 'auto-save save 'para par-check
-     'dir dir 'rel-imp rel-imp 'rel-sto
-     rel-sto 'errors err 'status status
-     'validity val-check 'warnings warn)
-        (LIST 'auto-save save 'para par-check
-     'dir dir 'rel-imp rel-imp 'rel-sto
-     rel-sto 'errors err 'status status
-     'sys-imp sys-imp 'sys-sto sys-sto
-     'validity val-check 'warnings warn))))))
-  (DEFENV environment keywords))
-;**************************************************************************
-;                DEFCOMMAND  FOR DEFINE RELATION                                   *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC define-relation) (relation attr-des tup
-     dir doc key imp ss &AUX keywords)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'define-relation)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'define-relation
-        (ARGLIST 'define-relation))))
-      :arguments (:user-supplied (:label "Relation Name:"
-    :default nil
-    :type (:documentation
-     "Name of the relation to be defined."
-     :sexp))
-   ,*ucl-attr-desc*
-   ,*ucl-format*
-   ,*ucl-dir*
-   ,*ucl-doci*
-   ,*ucl-key*
-   ,*ucl-imp*
-   ,*ucl-sto*
-     :label "Give parameters for DEFINE RELATION:")
-      :menus ((command-menu :COLUMN "Definition"))
-      :documentation "used to define a relation."
-      :keys ((#\SUPER-D #\SUPER-R)))
-  (SEND *output-window* :append-item (FORMAT nil "~S"
-(LIST 'DEFREL
-      relation attr-des
-      (SETQ keywords
-    (LIST 'tuple-format tup 'dir dir 'doc doc
-  'key key 'imp imp 'sto ss)))))
-  (DEFREL relation attr-des keywords))
-;**************************************************************************
-;                DEFCOMMAND  FOR DEFINE VIEW *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC define-view) (viewname view-definition doc)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'define-view)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'define-view
-        (ARGLIST 'define-view))))
-      :arguments (:user-supplied (:label "View Name:"
-    :default nil
-    :type (:documentation
-       "Specify a name for the view."
-     :sexp))
-   (:label "View Definition:"
-    :default *ui-viewdef*
-    :type (:documentation
-       "Specify a definition for the view."
-     :sexp))
-   (:label "View Documentation:"
-    :default nil
-    :type (:documentation
-       "Specify documentation for the view."
-     :sexp))
- :label "Give parameters for DEFINE VIEW:")
-      :menus ((command-menu :COLUMN "Definition"))
-      :documentation "Used to define a view."
-      :keys ((#\SUPER-D #\SUPER-V)))
-  (SEND *output-window* :append-item (FORMAT nil "~S"
-(LIST 'DEFVIEW viewname view-definition doc)))
-  (DEFVIEW viewname view-definition doc))
-;**************************************************************************
-;                DEFCOMMAND  FOR DEFINE ATTRIBUTE                                  *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC define-attribute) (relation-name attr-des key
-      &AUX keywords)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'define-attribute)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'define-attribute
-        (ARGLIST 'define-attribute))))
-      :arguments (:user-supplied (:label "Relation name: "
-    :default *ui-relation*
-    :type (:documentation
-       "The name of the relation to which new attributes are to be added." :SEXP))
-   ,*ucl-attr-desc*
-   (:label "Key: "
-    :default nil
-    :type (:documentation
-       "New key for the relation if it is to be different from the previous value. Specify a list of attributes."
-       :SEXP))
- :label "Give parameters for DEFINE ATTRIBUTE:")
-      :menus ((command-menu :COLUMN "Definition"))
-      :documentation "Used to add attributes to relations."
-      :keys ((#\SUPER-D #\SUPER-A)))
-  (SEND *output-window* :append-item (FORMAT nil "~S"
-(LIST 'DEFINE-ATTRIBUTE relation-name attr-des
-      (SETQ keywords (LIST 'key key)))))
-  (DEFINE-ATTRIBUTE relation-name attr-des keywords))
-;**************************************************************************
-;                DEFCOMMAND  FOR MODIFY TUPLES                                     *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC modify-tuples) (relation where-clause attributes values
-     &AUX keywords)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'modify-tuples)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'modify-tuples
-        (ARGLIST 'modify-tuples))))
-      :arguments (:user-supplied (:label "Relation: "
-    :default *ui-relation*
-    :type (:documentation
-       "Specify the relation whose tuples are to be modified."
-     :sexp))
-   ,*ucl-where*
-   (:label "Attributes: "
-    :default *ui-attributes*
-    :type (:documentation
-       "Specify a list of attributes in the above relation to be modified." :sexp))
-   (:label "Values: "
-    :default *ui-values*
-    :type (:documentation
-       "Specify a corresponding list of values to modify the above attributes." :sexp))
- :label "Give parameters for MODIFY TUPLES ==>")
-      :menus ((command-menu :COLUMN "Manipulation"))
-      :documentation "Used to modify tuples in a relation."
-      :keys ((#\SUPER-M #\HYPER-M)))
-  (SEND *output-window* :append-item (FORMAT nil "~S"
-(LIST 'MODIFY relation (SETQ keywords (LIST 'where where-clause
-       'attr attributes
-       'values values)))))
-  (MODIFY relation keywords))
-;**************************************************************************
-;                DEFCOMMAND  FOR DELETE TUPLES                                     *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC delete-tuples) (relation where-clause)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'delete-tuples)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'delete-tuples
-        (ARGLIST 'delete-tuples))))
-      :arguments (:user-supplied (:label "Relation: "
-    :default *ui-relation*
-    :type (:documentation
-       "Specify a relation whose tuples are to be deleted."
-     :sexp))
-   (:label "Where clause: "
-    :default nil
-    :type (:documentation
-       "Deletes the tuples which satisfy this condition."
-     :sexp))
- :label "Give parameters for DELETE TUPLES ==>")
-      :menus ((command-menu :COLUMN "Manipulation"))
-      :documentation "Used to delete tuples in a relation."
-      :keys (#\HYPER-D))
-  (SEND *output-window* :append-item (FORMAT nil "~S"
-(LIST 'DELETE-TUPLES relation (LIST 'where where-clause))))
-  (DELETE-TUPLES  relation (LIST 'where where-clause)))
-;**************************************************************************
-;                DEFCOMMAND  FOR RETRIEVE TUPLES                                   *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC retrieve-tuples) (relation attributes where-clause
-     into dir doc key imp sto
-     qprint to-file sort
-     format wide number print
-     tuples qsort stream unique index-name
-     &AUX keywords)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'retrieve)
-       (FORMAT NIL "  ~S"
-      (CONS
-        'retrieve
-        (ARGLIST 'retrieve))))
-      :arguments (:user-supplied ,*ucl-retrieve-rel*
-   ,*ucl-attributes*
-   ,*ucl-where*
-   ,*ucl-into*
-   ,*ucl-dir*
-   ,*ucl-doco*
-   ,*ucl-key*
-   ,*ucl-imp*
-   ,*ucl-sto*
-   ,*ucl-qprint*
-   ,*ucl-out*
-   ,*ucl-sort*
-   ,*ucl-format*
-   ,*ucl-wide*
-   ,*ucl-num*
-   ,*ucl-print*
-   ,*ucl-tuples*
-   ,*ucl-quick-sort*
-   ,*ucl-stream*
-   ,*ucl-unique*
-    ,*ucl-index-name*
- :label "Give parameters for RETRIEVE TUPLES ==>")
-      :menus ((command-menu :COLUMN "Operators"))
-      :documentation "Used to Retrieve tuples in a relation."
-      :keys (#\HYPER-R))
-  (SEND *output-window* :append-item
-(FORMAT nil "~S"
-(LIST 'RETRIEVE
-      relation
-      (SETQ keywords
-    (LIST 'project
-   (IF (EQUAL attributes T)
-       NIL
-     attributes)
-   'where where-clause 'into into
-   'dir dir 'doc doc 'key key 'imp imp 'sto sto
-    'qprint (NOT qprint) 'output-to-file to-file
-   'sort sort 'format format
-   'wide wide 'num number
-   'print print 'tuples tuples
-   'quick-sort qsort 'stream stream
-   'unique unique 'index-name index-name)))))
-  (RETRIEVE relation keywords))
-;**************************************************************************
-;                DEFCOMMAND  FOR SELECT TUPLES                                     *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC select) (relation where-clause
-     into dir doc key imp sto
-     qprint to-file sort
-     format wide number print
-     tuples qsort stream unique index-name
-     &AUX keywords)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'select-tuples)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'select-tuples
-        (ARGLIST 'select-tuples))))
-      :arguments (:user-supplied ,*ucl-retrieve-rel*
-   ,*ucl-where*
-   ,*ucl-into*
-   ,*ucl-dir*
-   ,*ucl-doco*
-   ,*ucl-key*
-   ,*ucl-imp*
-   ,*ucl-sto*
-   ,*ucl-qprint*
-   ,*ucl-out*
-   ,*ucl-sort*
-   ,*ucl-format*
-   ,*ucl-wide*
-   ,*ucl-num*
-   ,*ucl-print*
-   ,*ucl-tuples*
-   ,*ucl-quick-sort*
-   ,*ucl-stream*
-   ,*ucl-unique*
-   ,*ucl-index-name*
- :label "Give parameters for SELECT TUPLES ==>")
-      :menus ((command-menu :COLUMN "Operators"))
-      :documentation "Used to Select tuples in a relation."
-      :keys ((#\SUPER-R #\SUPER-S)))
-  (SEND *output-window* :append-item
-(FORMAT nil "~S"
-(LIST 'SELECT-TUPLES
-      relation
-      (SETQ keywords
-    (LIST
-   'where where-clause 'into into
-   'dir dir 'doc doc 'key key 'imp imp 'sto sto
-   'qprint (NOT qprint) 'output-to-file to-file
-   'sort sort 'format format
-   'wide wide 'num number
-   'print print 'tuples tuples
-   'quick-sort qsort 'stream stream
-   'unique unique 'index-name index-name)))))
-  (RETRIEVE relation (APPEND (LIST 'project nil) keywords)))
-;**************************************************************************
-;                DEFCOMMAND  FOR PROJECT TUPLES                                    *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC Project) (relation attributes
-      into dir doc key imp sto
-      qprint to-file sort
-      format wide number print tuples
-      qsort stream unique
-      &AUX keywords)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'project)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'project
-        (ARGLIST
-          'project))))
-      :arguments (:user-supplied ,*ucl-retrieve-rel*
-   ,*ucl-attributes*
-   ,*ucl-into*
-   ,*ucl-dir*
-   ,*ucl-doco*
-   ,*ucl-key*
-   ,*ucl-imp*
-   ,*ucl-sto*
-   ,*ucl-qprint*
-   ,*ucl-out*
-   ,*ucl-sort*
-   ,*ucl-format*
-   ,*ucl-wide*
-   ,*ucl-num*
-   ,*ucl-print*
-   ,*ucl-tuples*
-   ,*ucl-quick-sort*
-   ,*ucl-stream*
-   ,*ucl-unique*
- :label "Give parameters for PROJECT TUPLES ==>")
-      :menus ((command-menu :COLUMN "Operators"))
-      :documentation "Used to Project tuples in a relation."
-      :keys ((#\SUPER-R #\SUPER-P)))
-  (SEND *output-window* :append-item
-(FORMAT nil "~S"
-(LIST 'PROJECT
-      relation
-      (SETQ keywords
-    (LIST 'project (IF (EQUAL attributes T)
-   nil
-        attributes)
-    'into into 'dir dir 'doc doc 'key key 'imp imp 'sto sto
-    'qprint (NOT qprint) 'output-to-file to-file
-    'sort sort 'format format
-    'wide wide 'num number 'print print 'tuples tuples
-    'quick-sort qsort 'stream stream 'unique unique)))))
-  (RETRIEVE relation (APPEND (LIST 'where t) keywords)))
-;**************************************************************************
-;                DEFCOMMAND  FOR COMMIT TRANSACTION                                *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC commit-transaction) (trans dir path &AUX keywords)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'commit-transaction)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'commit-transaction
-        (ARGLIST
-          'commit-transaction))))
-      :arguments (:user-supplied (:label "Name of the transaction :"
-    :default *ui-transaction*
-    :type (:documentation
-       "The name of an existing transaction." :SEXP))
-   (:label "Name of the directory:"
-    :default *ui-directory*
-    :type (:documentation
-       "Name of the directory which contains the transaction file, if the transaction is not in the memory." :SEXP))
-   (:label "Pathname:"
-    :default *ui-file*
-    :type (:documentation
-    "If the transaction is not in memory, provide the pathname for the transaction file. It defaults to <transaction>.lisp." :SEXP))
- :label "Give parameters for COMMIT TRANSACTION")
-      :menus ((command-menu :COLUMN "Operators"))
-      :documentation "Commit a transaction - execute all the database calls in it."
-      :keys ((#\SUPER-T #\SUPER-C)))
-  (SEND *output-window* :append-item
-(FORMAT nil "~S"
-(LIST 'COMMIT-TRANSACTION trans (SETQ keywords
-         (LIST 'dir dir
-        'path path)))))
-  (COMMIT-TRANSACTION trans keywords)
-)
-;**************************************************************************
-;                DEFCOMMAND  FOR JOIN        *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC join) (into from project where
-      tuples format dir doc key imp sto
-             print unique &AUX keywords)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'join)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'join
-        (ARGLIST
-          'join))))
-      :arguments (:user-supplied (:label "Output relation :"
-    :default *ui-join-into*
-    :type (:documentation
-       "If not provided, the result of JOIN is stored in a temporary relation unless only the resultant tuples are requested." :SEXP))
-   (:LABEL "FROM :"
-    :DEFAULT *ui-from*
-    :TYPE (:DOCUMENTATION
-     "Specify a list of two relations to be joined." :SEXP))
-   (:label "Project :"
-    :default NIL
-    :type (:documentation
-       "This gives the attributes in the output relation. Example: (rel1.* a3 (rel2.a1 a4)) ==> All the attributes in rel1, attribute A3 of rel2 and atribute A1 of rel2 renamed as A4." :SEXP))
-   (:label "Where :"
-    :default *ui-over*
-    :type (:documentation
-     "The join clause using the theta-operators. It is a where clause consisting of attributes from the relations being joined." :SEXP))
-   (:label "Tuples?"
-    :default NIL
-    :type (:documentation
-     "Specify if the resultant tuples be returned rather than inserted in a relation. The following parameters can be ignored if this is true."
-     :boolean))
-   ,*ucl-format*
-   ,*ucl-dir*
-   ,*ucl-doco*
-   ,*ucl-key*
-   ,*ucl-imp*
-   ,*ucl-sto*
-   ,*ucl-print*
-   ,*ucl-unique*
- :label "Give parameters for JOIN")
-      :menus ((command-menu :COLUMN "Operators"))
-      :documentation "Used to join relations."
-      :keys (#\SUPER-J))
-  (SEND *output-window* :append-item
-(FORMAT nil "~S"
-(LIST 'JOIN 'from from
-      (SETQ keywords (LIST 'project project
-     'into into
-     'tuples tuples
-     'format format
-     'dir dir
-     'doc doc
-     'key key
-     'imp imp
-     'sto sto
-     'print print
-     'where where 'unique unique)))))
-  (JOIN-INTERNAL (APPEND (LIST 'from from) keywords))
-)
-;**************************************************************************
-;                DEFCOMMAND  FOR DESTROY DATABASE                                 *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC destroy-database) (database disk &AUX keywords)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'destroy-database)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'destroy-database
-        (ARGLIST
-          'destroy-database))))
-      :arguments (:user-supplied (:label "Database Name:"
-    :default nil
-    :type (:documentation
-       "Name of the database to be destroyed." :SEXP))
-   (:label "Delete from the DISK:"
-    :default NIL
-    :type (:documentation
-     "IF YES all the files pertaining to this database are deleted but NOT EXPUNGED." :BOOLEAN))
- :label "Give parameters for DESTROY DATABASE:")
-      :menus ((command-menu :COLUMN "Manipulation"))
-      :documentation "Used to destroy databases"
-      :keys ((#\SUPER-K #\SUPER-D)))
-  (SEND *output-window* :append-item
-(FORMAT nil "~S"
-(LIST 'DESTROY-DATABASE database
-      (SETQ keywords (LIST 'disk disk)))))
-  (DESTROY-DATABASE database keywords)
-)
-;**************************************************************************
-;                DEFCOMMAND  FOR DESTROY DOMAIN                                    *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC destroy-domain) (domain)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'destroy-domain)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'destroy-domain
-        (ARGLIST
-          'destroy-domain))))
-      :arguments (:user-supplied (:label "Domain Name:"
-    :default nil
-    :type (:documentation
-       "Name of the domain to be destroyed." :SEXP))
- :label "Give parameters for DESTROY DOMAIN:")
-      :menus ((command-menu :COLUMN "Manipulation"))
-      :documentation "Used to destroy domains."
-      :keys (#\SUPER-HYPER-K))
-  (SEND *output-window* :append-item
-(FORMAT nil "~S"
-(LIST 'DESTROY-DOMAIN domain)))
-  (DESTROY-DOMAIN domain))
-;**************************************************************************
-;                DEFCOMMAND  FOR DESTROY IMPLEMENTATION                            *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC destroy-implementation) (implementation)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'destroy-implementation)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'destroy-implementation
-        (ARGLIST
-          'destroy-implementation))))
-      :arguments (:user-supplied (:label "Implementation Name:"
-    :default nil
-    :type (:documentation
-       "Name of the implementation to be destroyed." :SEXP))
- :label "Give parameters for DESTROY IMPLEMENTATION:")
-      :menus ((command-menu :COLUMN "Manipulation"))
-      :documentation "Used to destroy implementations."
-      :keys ((#\SUPER-K #\SUPER-I)))
-  (SEND *output-window* :append-item
-(FORMAT nil "~S"
-(LIST 'DESTROY-IMPLEMENTATION implementation)))
-  (DESTROY-IMPLEMENTATION implementation))
-;**************************************************************************
-;                DEFCOMMAND  FOR DESTROY INDEX                            *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC DESTROY-INDEX) (relation-name index-name)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'destroy-index)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'destroy-index
-        (ARGLIST
-          'destroy-index))))
-      :arguments (:user-supplied (:label "Relation Name:"
-    :default nil
-    :type (:documentation
-       "Name of the relation on which the index to be destroyed is defined." :SEXP))
-   (:label "Index Name:"
-    :default nil
-    :type (:documentation
-       "Name of the index to be destroyed." :SEXP))
-     :label "Give parameters for DESTROY INDEX:")
-      :menus ((command-menu :COLUMN "Manipulation"))
-      :documentation "Used to destroy indices."
-      :keys ((#\SUPER-K #\HYPER-I)))
-  (SEND *output-window* :append-item
-(FORMAT nil "~S"
-(LIST 'DESTROY-INDEX relation-name index-name)))
-  (DESTROY-INDEX relation-name index-name))
-;**************************************************************************
-;                DEFCOMMAND  FOR DESTROY STORAGE STRUCTURE                         *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC destroy-storage-structure) (storage-structure)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'destroy-storage-structure)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'destroy-storage-structure
-        (ARGLIST
-          'destroy-storage-structure))))
-      :arguments (:user-supplied (:label "Storage structure name:"
-    :default nil
-    :type (:documentation
-       "Name of the storage structure to be destroyed." :SEXP))
- :label "Give parameters for DESTROY STORAGE STRUCTURE:")
-      :menus ((command-menu :COLUMN "Manipulation"))
-      :documentation "Used to destroy storage structures."
-      :keys ((#\SUPER-K #\SUPER-S)))
-  (SEND *output-window* :append-item
-(FORMAT nil "~S"
-(LIST 'DESTROY-STORAGE-STRUCTURE storage-structure)))
-  (DESTROY-STORAGE-STRUCTURE storage-structure))
-;**************************************************************************
-;                DEFCOMMAND  FOR DESTROY VIEW                                      *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC destroy-view) (view)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'destroy-view)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'destroy-view
-        (ARGLIST
-          'destroy-view))))
-      :arguments (:user-supplied (:label "View name:"
-    :default nil
-    :type (:documentation
-       "Name of the view to be destroyed."
-       :SEXP))
- :label "Give parameters for DESTROY VIEW:")
-      :menus ((command-menu :COLUMN "Manipulation"))
-      :documentation "Used to destroy views."
-      :keys ((#\SUPER-K #\SUPER-V)))
-  (SEND *output-window* :append-item
-(FORMAT nil "~S"
-(LIST 'DESTROY-VIEW view)))
-  (DESTROY-VIEW view))
-;**************************************************************************
-;                DEFCOMMAND  FOR DESTROYREL   *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC destroy-relation) (relation disk &AUX keywords)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'destroy-relation)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'destroy-relation
-        (ARGLIST
-          'destroy-relation))))
-      :arguments (:user-supplied (:label "Relation Name:"
-    :default nil
-    :type (:documentation
-       "Name of the relation to be destroyed." :SEXP))
-   (:label "Delete from the DISK:"
-    :default NIL
-    :type (:documentation
-     "IF YES the file corresponding to this relation is deleted but NOT EXPUNGED." :BOOLEAN))
- :label "Give parameters for DESTROY RELATION:")
-      :menus ((command-menu :COLUMN "Manipulation"))
-      :documentation "Used to destroy relations"
-      :keys ((#\SUPER-K #\SUPER-R)))
-  (SEND *output-window* :append-item
-(FORMAT nil "~S"
-(LIST 'DESTROY-RELATION
-      relation (SETQ keywords (LIST 'disk disk)))))
-  (DESTROY-RELATION relation keywords)
-)
-;**************************************************************************
-;                DEFCOMMAND  FOR DESTROY ATTRIBUTE                                 *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC destroy-attribute) (relation attr key &AUX keywords)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'destroy-attribute)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'destroy-attribute
-        (ARGLIST
-          'destroy-attribute))))
-      :arguments (:user-supplied (:label "Relation Name:"
-    :default nil
-    :type (:documentation
-       "Name of the relation from which attributes are to be destroyed." :SEXP))
-   (:label "Attributes:"
-    :default nil
-    :type (:documentation
-       "List of attributes to destroy." :SEXP))
-   (:label "Key:"
-    :default NIL
-    :type (:documentation
-     "New key for the relation if it is to be different from the previous value or if any of the key attributes are destroyed." :SEXP))
- :label "Give parameters for DESTROY ATTRIBUTE:")
-      :menus ((command-menu :COLUMN "Manipulation"))
-      :documentation "Used to destroy attributes from relations"
-      :keys ((#\SUPER-K #\SUPER-A)))
-  (SEND *output-window* :append-item
-(FORMAT nil "~S"
-(LIST 'DESTROY-ATTRIBUTE relation (SETQ keywords (LIST 'attr attr
-      'key key)))))
-  (DESTROY-ATTRIBUTE relation keywords)
-)
-;**************************************************************************
-;                DEFCOMMAND  FOR SET UNION   *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC union) (from into tuples format
-       dir doc key imp sto print unique
-       &AUX keywords)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'relation-union)
-     (FORMAT NIL "  ~S"
-       (CONS
-        'relation-union
-        (ARGLIST
-          'relation-union))))
-      :arguments (:user-supplied (:label "List of two relations:"
-    :default NIL
-    :type (:documentation
-     "List of the names of two relations which will take part in the relation union operation. The attributes to be projected and a where clause can be specified for each relation using keywords. For instance, (REL1 (PROJECT <attr> WHERE <where-claue>) REL2 (WHERE <where-clause> PROJECT <attr>))." :SEXP))
-   ,*ucl-into*
-   (:label "Tuples?"
-    :default NIL
-    :type (:documentation
-     "Specify if the resultant tuples be returned rather than inserted in a relation. The following parameters can be ignored if this is true."
-     :boolean))
-   ,*ucl-format*
-   ,*ucl-dir*
-   ,*ucl-doco*
-   ,*ucl-key*
-   ,*ucl-imp*
-   ,*ucl-sto*
-   ,*ucl-print*
-   ,*ucl-unique*
-  :LABEL "Parameters for the set-union of two relations")
-      :menus ((command-menu :COLUMN "Operators"))
-      :documentation "Used to form union of two compatible relations"
-      :keys ((#\SUPER-O #\SUPER-U)))
-  (SEND *output-window* :append-item
-(FORMAT nil "~S"
-(LIST 'RELATION-UNION
-      (SETQ keywords (LIST 'into into
-     'from from 'tuples tuples
-     'format format 'dir dir 'doc doc
-     'key key 'imp imp 'sto sto
-     'print print 'unique unique)))))
-  (RELATION-UNION keywords))
-;**************************************************************************
-;                DEFCOMMAND  FOR SET DIFFERENCE                                    *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC difference) (from into tuples format
-       dir doc key imp sto print unique
-       &AUX keywords)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'relation-difference)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'relation-difference
-        (ARGLIST
-          'relation-difference))))
-      :arguments (:user-supplied (:label "List of two relations:"
-    :default NIL
-    :type (:documentation
-     "List of the names of two relations which will take part in the relation difference operation. The attributes to be projected and a where clause can be specified for each relation using keywords. For instance, (REL1 (PROJECT <attr> WHERE <where-claue>) REL2 (WHERE <where-clause> PROJECT <attr>))." :SEXP))
-   ,*ucl-into*
-   (:label "Tuples?"
-    :default NIL
-    :type (:documentation
-     "Specify if the resultant tuples be returned rather than inserted in a relation. The following parameters can be ignored if this is true."
-     :boolean))
-   ,*ucl-format*
-   ,*ucl-dir*
-   ,*ucl-doco*
-   ,*ucl-key*
-   ,*ucl-imp*
-   ,*ucl-sto*
-   ,*ucl-print*
-   ,*ucl-unique*
-  :LABEL "Parameters for the set-difference of two relations")
-      :menus ((command-menu :COLUMN "Operators"))
-      :documentation "Used to form difference of two compatible relations"
-      :keys ((#\SUPER-O #\SUPER-D)))
-  (SEND *output-window* :append-item
-(FORMAT nil "~S"
-(LIST 'RELATION-DIFFERENCE
-      (SETQ keywords (LIST 'into into
-     'from from 'tuples tuples
-     'format format 'dir dir 'doc doc
-     'key key 'imp imp 'sto sto
-     'print print 'unique unique)))))
-  (RELATION-DIFFERENCE keywords))
-;**************************************************************************
-;                DEFCOMMAND  FOR SET INTERSECTION                                  *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC intersection) (from into tuples format
-       dir doc key imp sto print unique
-       &AUX keywords)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'relation-intersection)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'relation-intersection
-        (ARGLIST
-          'relation-intersection))))
-      :arguments (:user-supplied (:label "List of two relations:"
-    :default NIL
-    :type (:documentation
-     "List of the names of two relations which will take part in the relation intersection operation. The attributes to be projected and a where clause can be specified for each relation using keywords. For instance, (REL1 (PROJECT <attr> WHERE <where-claue>) REL2 (WHERE <where-clause> PROJECT <attr>))." :SEXP))
-   ,*ucl-into*
-   (:label "Tuples?"
-    :default NIL
-    :type (:documentation
-     "Specify if the resultant tuples be returned rather than inserted in a relation. The following parameters can be ignored if this is true."
-     :boolean))
-   ,*ucl-format*
-   ,*ucl-dir*
-   ,*ucl-doco*
-   ,*ucl-key*
-   ,*ucl-imp*
-   ,*ucl-sto*
-   ,*ucl-print*
-   ,*ucl-unique*
-  :LABEL "Parameters for the set-intersection of two relations")
-      :menus ((command-menu :COLUMN "Operators"))
-      :documentation "Used to form intersection of two compatible relations"
-      :keys ((#\SUPER-O #\SUPER-I)))
-  (SEND *output-window* :append-item
-(FORMAT nil "~S"
-(LIST 'RELATION-INTERSECTION
-      (SETQ keywords (LIST 'into into
-     'from from 'tuples tuples
-     'format format 'dir dir 'doc doc
-     'key key 'imp imp 'sto sto
-     'print print 'unique unique)))))
-  (RELATION-INTERSECTION keywords))
-;**************************************************************************
-;                DEFCOMMAND  FOR AVERAGE     *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC average) (relation attribute unique where by tuples
-      &AUX keywords)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'average)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'average
-        (ARGLIST
-          'average))))
-      :arguments (:user-supplied (:label "Relation name:"
-    :default *ui-relation*
-    :type (:documentation
-     "Name of the relation which contains the attribute to be averaged." :SEXP))
-   ,*ucl-count-attr*
-   ,*ucl-count-unique*
-      ,*ucl-where*
-   ,*ucl-by*
-   ,*ucl-tuples*
-  :LABEL "Parameters for average:")
-      :menus ((command-menu :COLUMN "Operators"))
-      :documentation "Used to compute the average of the attribute values in a relation."
-      :keys ((#\SUPER-O #\SUPER-A)))
-  (SEND *output-window* :append-item
-(FORMAT nil "~S"
-(LIST 'AVERAGE relation attribute
-      (SETQ keywords (LIST 'unique unique
-     'where where 'by by 'tuples tuples)))))
-  (AVERAGE relation attribute keywords))
-;**************************************************************************
-;                DEFCOMMAND  FOR SUM         *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC sum) (relation attribute unique where by tuples
-  &AUX keywords)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'sum)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'sum
-        (ARGLIST
-          'sum))))
-      :arguments (:user-supplied (:label "Relation name:"
-    :default *ui-relation*
-    :type (:documentation
-     "Name of the relation which contains the attribute to be summed." :SEXP))
-   ,*ucl-count-attr*
-   ,*ucl-count-unique*
-   ,*ucl-where*
-   ,*ucl-by*
-   ,*ucl-tuples*
-  :LABEL "Parameters for sum:")
-      :menus ((command-menu :COLUMN "Operators"))
-      :documentation "Used to compute the sum of the attribute values in a relation."
-      :keys ((#\SUPER-O #\SUPER-S)))
-  (SEND *output-window* :append-item
-(FORMAT nil "~S"
-(LIST 'SUM relation attribute
-      (SETQ keywords (LIST 'unique unique 'by by 'tuples tuples
-     'where where)))))
-  (SUM relation attribute keywords))
-;**************************************************************************
-;                DEFCOMMAND  FOR SIZE        *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC size) (relation unique where by tuples &AUX keywords)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'size)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'size
-        (ARGLIST
-          'size))))
-      :arguments (:user-supplied (:label "Relation name:"
-    :default *ui-relation*
-    :type (:documentation
-     "Name of the relation whose size is required." :SEXP))
-   ,*ucl-count-unique*
-   ,*ucl-where*
-   ,*ucl-by*
-   ,*ucl-tuples*
-  :LABEL "Parameters for size:")
-      :menus ((command-menu :COLUMN "Operators"))
-      :documentation "Used to compute the size of the relation."
-      :keys (#\SUPER-HYPER-S))
-  (SEND *output-window* :append-item
-(FORMAT nil "~S"
-(LIST 'SIZE relation
-      (SETQ keywords (LIST 'unique unique 'by by 'tuples tuples
-     'where where)))))
-  (SIZE relation keywords))
-;**************************************************************************
-;                DEFCOMMAND  FOR COUNT-RTMS     *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC count) (relation attribute unique where by tuples
-         &AUX keywords)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'count-rtms)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'count-rtms
-        (ARGLIST
-          'count-rtms))))
-      :arguments (:user-supplied (:label "Relation name:"
-    :default *ui-relation*
-    :type (:documentation
-     "Name of the relation which contains the attribute to be used to find the number of tuples." :SEXP))
-   ,*ucl-count-attr*
-   ,*ucl-count-unique*
-   ,*ucl-where*
-   ,*ucl-by*
-   ,*ucl-tuples*
-  :LABEL "Parameters for count:")
-      :menus ((command-menu :COLUMN "Operators"))
-      :documentation "Used to compute the count of the attribute values in a relation."
-      :keys ((#\SUPER-O #\SUPER-C)))
-  (SEND *output-window* :append-item
-(FORMAT nil "~S"
-(LIST 'COUNT-RTMS relation attribute
-      (SETQ keywords (LIST 'unique unique 'by by 'tuples tuples
-     'where where)))))
-  (COUNT-RTMS relation attribute keywords))
-;**************************************************************************
-;                DEFCOMMAND  FOR MAXIMUM     *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC maximum) (relation attribute where by tuples
-      &AUX keywords)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'maximum)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'maximum
-        (ARGLIST
-          'maximum))))
-      :arguments (:user-supplied (:label "Relation name:"
-    :default *ui-relation*
-    :type (:documentation
-     "Name of the relation which contains the attribute to be maximumd." :SEXP))
-   ,*ucl-count-attr*
-   ,*ucl-where*
-   ,*ucl-by*
-   ,*ucl-tuples*
-  :LABEL "Parameters for maximum:")
-      :menus ((command-menu :COLUMN "Operators"))
-      :documentation "Used to compute the maximum of the attribute values in a relation."
-      :keys ((#\SUPER-O #\SUPER-M)))
-  (SEND *output-window* :append-item
-(FORMAT nil "~S"
-(LIST 'MAXIMUM relation attribute
-      (SETQ keywords (LIST 'where where 'by by 'tuples tuples)))))
-  (MAXIMUM relation attribute keywords))
-;**************************************************************************
-;                DEFCOMMAND  FOR MINIMUM     *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC minimum) (relation attribute where by tuples
-      &AUX keywords)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'minimum)
-     (FORMAT NIL "  ~S"
-      (CONS
-        'minimum
-        (ARGLIST
-          'minimum))))
-      :arguments (:user-supplied (:label "Relation name:"
-    :default *ui-relation*
-    :type (:documentation
-     "Name of the relation which contains the attribute to be minimumd." :SEXP))
-   ,*ucl-count-attr*
-   ,*ucl-where*
- LMFL#!C(:HOST "SW-MFG" :BACKUP-DATE 2760540749. :SYSTEM-TYPE :LOGICAL :VERSION 3. :TYPE "XLD" :NAME "INTERFACE" :DIRECTORY ("RTMS-DIR") :SOURCE-PATTERN "( :DIRECTORY (\"RTMS-DIR\") :NAME :WILD :TYPE :WILD :VERSION :NEWEST)" :NOT-BACKED-UP T :CREATION-DATE 2760360973. :AUTHOR "REL3" :LENGTH-IN-BYTES 68086. :LENGTH-IN-BLOCKS 133. :BYTE-SIZE 16.)                                 pp2Ä\Ä©ÅCOMPILE-DATA\ÄÏÄSW-MFG,ÅGODZILLAÜÄá§“FÄFÄ\Äp¿,ÅCOMPILER,ÅVERSIONÄ\ÄFÄFÄp¿BÄ),ÇOPTIMIZE-SWITCHÄÜÄ©ÉQFASL-SOURCE-FILE-UNIQUE-IDÄ1Ä\Äp¿lÄFSÏÇMAKE-FASLOAD-PATHNAMEÄ\ÄÍÄQUOTEÄBÄ$\ÄBÄ8™ÄNILÄ\ÄBÄ8\Ä¨ÄRTMS\ÄBÄ8lÅINTERFACEÄ\ÄBÄ8¨ÄLISP\ÄBÄ8FÄ©ÄBASEFÄ
-ÈÄFONTSÄ\Ä©ÅWIDER-MEDFNTÈÄMEDFNBBÄJ©ÄHL7Ä)ÅPACKAGEÄ©ÄRTMS©ÄMODE©ÅCOMMON-LISPÄ1Ä\Ä*ÅPUTPROPÄ\ÄBÄ8ÅDISPLAYÄBÄ:\ÄBÄ8p¿¨ÄUCLÄÏÄITEMSÄ1Ä\ÄBÄQ\ÄBÄ8BÄSBÄ:\ÄBÄ8p¿BÄU¨ÇCOMMANDS-WANTING-ONÄ1Ä\ÄBÄQ\ÄBÄ8ÉÅCOMMAND-MENUBÄ:\ÄBÄ8BÄW1Ä\ÄBÄQ\ÄBÄ8BÄaBÄ:\ÄBÄ8BÄ]1Ä\ÄBÄQ\ÄBÄ8ÉÅSYSTEM-MENUÄBÄ:\ÄBÄ8BÄW1Ä\ÄBÄQ\ÄBÄ8BÄjBÄ:\ÄBÄ8BÄ]ÄjÅ*PACKAGE*ÄNÄr√Å*DEFAULT-PKG*Ä1Ä\Äp¿¨ÄTICL,ÅPKG-GOTOÉÅ*PKG-STRING*1Ä\Äp¿BÄU¨ÅMAKE-SYNONYM\ÄBÄ8√Å*UI-RELATION*ÄBÄ:1Ä\ÄBÄ|\ÄBÄ8ÉÅ*UI-TUPLES*ÄBÄ:1Ä\ÄBÄ|\ÄBÄ8Ç*UI-TRANSACTION*BÄ:1Ä\ÄBÄ|\ÄBÄ8√Å*UI-FUNCTION*ÄBÄ:1Ä\ÄBÄ|\ÄBÄ8Ç*UI-ATTRIBUTES*ÄBÄ:1Ä\ÄBÄ|\ÄBÄ8ÉÅ*UI-FORMAT*ÄBÄ:1Ä\ÄBÄ|\ÄBÄ8CÅ*UI-FILE*ÄBÄ:1Ä\ÄBÄ|\ÄBÄ8√Å*UI-DATABASE*ÄÉÅ*ACTIVE-DB*Ä1Ä\ÄBÄ|\ÄBÄ8√Å*UI-DIRECTORY*\Äp¿BÄuÏÅSTRING-APPENDÄ¨ÄSYS:p¿BÄu,ÅUSER-IDÄlÄ;Ä1Ä\ÄBÄ|\ÄBÄ8CÅ*UI-TYPE*Ä\ÄBÄ8ÉÄXLDÄ1Ä\ÄBÄ|\ÄBÄ8√Å*UI-ATTR-DESC*BÄ:1Ä\ÄBÄ|\ÄBÄ8Å*UI-DOC*ÏÄ.....Ä1Ä\ÄBÄ|\ÄBÄ8Å*UI-KEY*BÄ:1Ä\ÄBÄ|\ÄBÄ8Å*UI-IMP*√Ñ*SYSTEM-RELATION-BASE-IMPLEMENTATION*Ä1Ä\ÄBÄ|\ÄBÄ8Å*UI-SS*ÄÉÑ*SYSTEM-RELATION-STORAGE-STRUCTURE*Ä1Ä\ÄBÄ|\ÄBÄ8ÉÅ*UI-VIEWDEF*BÄ:1Ä\ÄBÄ|\ÄBÄ8CÅ*UI-WHERE*jÄTÄ1Ä\ÄBÄ|\ÄBÄ8ÉÅ*UI-VALUES*ÄBÄ:1Ä\ÄBÄ|\ÄBÄ8√Å*UI-JOIN-INTO*BÄ:1Ä\ÄBÄ|\ÄBÄ8CÅ*UI-OVER*ÄBÄÃ1Ä\ÄBÄ|\ÄBÄ8CÅ*UI-INTO*ÄBÄ:1Ä\ÄBÄ|\ÄBÄ8CÅ*UI-FROM*ÄBÄ:1Ä\ÄBÄ|\ÄBÄ8CÅ*UI-WIDE*ÄBÄ:1Ä\ÄBÄ|\ÄBÄ8Å*UI-NUM*F¿1Ä\ÄBÄ|\ÄBÄ8CÅ*UI-SORT*ÄBÄ:1Ä\ÄBÄ|\ÄBÄ8ÉÅ*UI-OBJECT*ÄBÄ:1Ä\ÄBÄ|\ÄBÄ8CÅ*UI-REL2*ÄBÄ:1Ä\Äp¿¨ÄSYSÄlÅDEFCONST-1CÉ*LINE-AREA-DOCUMENTATION*Ä\ÄBÄ8\ÄÈÅDOCUMENTATIONÄ,ÄiÅMOUSE-L-1Ä,ÉTo see the entire line.ÄiÅMOUSE-M-2Ä¨ÇTo delete the tuple.iÅMOUSE-R-1Ä¨ÇTo modify the tuple.láThe wholine documentation string when a line is selected.Ä1Ä\ÄBÄ˙ÉÑ*DBMS-WINDOW-WHOLINE-DOCUMENTATION*Ä\ÄBÄ8\ÄÄ˛,äWindow for database output. Some items are made mouse-sensitive for inspection.ÄBÄlÇRTMS Command MenuÄiÅMOUSE-R-2Ä¨ÅSystem MenuÄl The wholine documentation string when in the RTMS interface output window.1Ä\ÄBÄ˙ÉÑ*INTERACTION-WHOLINE-DOCUMENTATION*Ä\ÄBÄ8\ÄÄ˛¨äThis window accepts user input. Input can also be provided through the command menu.BÄlÇRTMS Command MenuÄBÄ¨ÅSystem MenuÄ1Ä\ÄBÄ˙CÑ*ATTRIBUTE-WHOLINE-DOCUMENTATION*Ä\ÄBÄ8\ÄiÅMOUSE-ANYÄ¨ÑTo see this ATTRIBUTE's definition.Ä1Ä\ÄBÄ˙ÉÑ*DBMS-OBJECT-WHOLINE-DOCUMENTATION*Ä\ÄBÄ8\ÄBÄ,ÑTo see this object's definition.1Ä\ÄBÄ˙Ñ*RELATION-WHOLINE-DOCUMENTATION*\ÄBÄ8\ÄBÄ˛,ÄBÄ,ÑTo see the RELATION definition.ÄiÅMOUSE-M-1Ä,ÑTo modify the RELATION features.BÄlÉTo retrieve this RELATION.1Ä\ÄBÄ˙Ñ*DATABASE-WHOLINE-DOCUMENTATION*\ÄBÄ8\ÄBÄÏÜList the relations in this DATABASE, if it is active.Ä1Ä\Äp¿BÄ¯lÅDEFFLAVOR2\ÄBÄ8CÅMENU-PANEÄBÄ:\ÄBÄ8\Äp¿lÄWÄ¨ÄMENU\ÄBÄ8\Ä\ÄiÇDEFAULT-INIT-PLIST©ÅCOMMAND-MENUBÄÃ)ÅDYNAMICÄBÄÃ1Ä\ÄBÄ9\ÄBÄ8ÉÅDBMS-WINDOWÄBÄ:\ÄBÄ8\Äp¿lÄTV¨ÉLINE-AREA-TEXT-SCROLL-MIXINÄp¿BÄM¨ÉFUNCTION-TEXT-SCROLL-WINDOWÄp¿BÄMlÑMOUSE-SENSITIVE-TEXT-SCROLL-WINDOWp¿BÄM¨ÇMARGIN-REGION-MIXINÄp¿BÄM,ÇSCROLL-BAR-MIXINp¿BÄMÏÅANY-TYI-MIXINÄp¿BÄ>ÏÄWINDOWBÄ:Ä\ÄÈÄMETHODBÄJÈÉLINE-AREA-MOUSE-DOCUMENTATIONÄÄÎÄFÄ@FÄ¿$Ä¿BÄ:p¿BÄuÏÄART-QÄ]ÄFÄÄ:BÄ:BÄ:BÄÃFÄp¿BÄ¯lÇDEBUG-INFO-STRUCTÄBÄ]\Äp¿BÄ¯¨Å.OPERATION.ÄBÄ:BÄ:\Ä©ÅSELF-FLAVORÄBÄJÄBÄ˚ëOÄpBÄ]Ä1Ä\ÄBÄ9\ÄBÄ8ÉDBMS-WINDOW-WITH-TYPEOUTBÄ:\ÄBÄ8\Äp¿BÄM,ÑTEXT-SCROLL-WINDOW-TYPEOUT-MIXINBÄJ\ÄBÄ8\Ä\ÄBÄDÈÅTYPEOUT-WINDOW\ÄBÄ8\Äp¿BÄMÏÅTYPEOUT-WINDOW)ÉDEEXPOSED-TYPEOUT-ACTION\ÄiÇEXPOSE-FOR-TYPEOUTÄ\ÄBÄ^BÄsÈÉWHO-LINE-DOCUMENTATION-STRINGÄÄÎÄ(ÜÄ@HFÄ ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄÑ\ÄBÄmBÄ:\ÄÍÄIGNORECÅM-S-I-TYPE\Ä)ÇMACROS-EXPANDEDÄ\Äp¿BÄu¨ÄSEND™ÄCASEBÄoBÄsÄBÄ	—BÄ"—BÄ2—BÄ(—BÄ—p¿BÄ¯,ÅMOUSE-YÄ—p¿BÄ¯,ÅMOUSE-XÄ—Ç*OUTPUT-WINDOW*Äë©ÇMOUSE-SENSITIVE-ITEM¿FÄêÄFÄ¿CÅATTRIBUTEÄ¿ÅRELATION¿ÅDATABASE¿ÉÅDBMS-OBJECTÄ¿FÄ¿FÄ>¿FÄ:¿FÄ;¿FÄ<¿FÄ=ÄP	PPP
-PAA¡@¡AQrOÄ©BÄÑÄ1Ä\ÄBÄ9\ÄBÄ8ÇINTERACTION-PANEBÄ:\ÄBÄ8\Äp¿BÄUÏÉCOMMAND-AND-LISP-TYPEIN-WINDOWp¿BÄMÏÉPREEMPTABLE-READ-ANY-TYI-MIXINBÄ:Ä\ÄBÄ^BÄ¨BÄÖÄÎÄFÄ@FÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ¥\ÄBÄmBÄ:BÄ:\ÄBÄoBÄ¨ÄBÄëOÄæBÄ¥ÄÄ\ÄBÄ^BÄ¨ÈÄBEFOREÈÄSELECTÄÎÄÜÄ`DFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄø\ÄBÄmÍÄ&RESTÄBÄèBÄ:\ÄBÄè\ÄBÄí\ÄBÄïBÄoBÄ¨ÄÉÅDBMS-FRAME1ÄëÈÄEXPOSEÄPåOÄ–BÄøÄÄ\ÄBÄ^BÄ¨ÈÄAFTERÄBÄ¡ÄÎÄÜÄ`DFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ—\ÄBÄmBÄ BÄèBÄ:\ÄBÄè\ÄBÄoBÄ¨ÄROÄ›BÄ—Ä1Ä\ÄBÄ9\ÄBÄ8ÅDBMS-RCÄBÄ:\ÄBÄ8\Äp¿BÄUlÇCOMMAND-LOOP-MIXINp¿BÄM¨ÅSTREAM-MIXINp¿BÄMlÑINFERIORS-NOT-IN-SELECT-MENU-MIXINp¿BÄM,ÜBORDERED-CONSTRAINT-FRAME-WITH-SHARED-IO-BUFFERÄ\ÄBÄ8\Ä\ÄBÄDiÅMENU-PANES\ÄBÄ8\Ä\ÄÅS-M-PANEBÄjÈÇACTIVE-COMMAND-TABLESÄ\ÄBÄ8\ÄÉÅDBMS-COMTABÄiÇALL-COMMAND-TABLES\ÄBÄ8\ÄBÄˆÈÅTYPEIN-HANDLER©ÇHANDLE-TYPEIN-INPUTÄÈÅMINIMUM-WIDTHÄ\ÄBÄïp¿BÄMÏÅDEFAULT-SCREENÈÄWIDTHÄÈÅMINIMUM-HEIGHT\ÄBÄïBÄˇÈÄHEIGHTiÅBASIC-HELP\ÄBÄ8\ÄÉÄHELPÈÅPRINT-FUNCTION\ÄBÄ8CÅNEW-PRINTÄÈÅPRINT-RESULTS?\Ä*ÅFUNCTION\ÄÍÄLAMBDABÄ:BÄÃÈÄPANESÄ\Äp¿BÄ¯lÅXR-BQ-LIST\ÄBÄ\ÄBÄ8√ÄO-PANE\ÄBÄ8BÄs\ÄBÄ8iÅBLINKER-PÄBÄ:\ÄBÄ8BÄ\ÄBÄ8ÉÅDBMS-PRINTER\ÄBÄ8iÇPRINT-FUNCTION-ARGBÄ:\ÄBÄ8)ÇSCROLL-BAR-SIDEÄ\ÄBÄ8ÈÄRIGHTÄ\ÄBÄ8)ÇSCROLL-BAR-MODEÄ\ÄBÄ8)ÅMAXIMUMÄ\ÄBÄ8)ÅBORDERSÄBÄ:\ÄBÄ8ÈÄLABELÄ\ÄÄÈÄBOTTOMÈÄSTRINGÏÄOUTPUT©ÄFONTp¿ÏÄFONTSÄ,ÅCPTFONTÄ\ÄBÄ8)ÅFONT-MAP\ÄBÄp¿BÄ0,ÅCPTFONTB\ÄBÄ8©ÇSENSITIVE-ITEM-TYPES\ÄBÄ\ÄBÄ8BÄ†\ÄBÄ8BÄü\ÄBÄ8BÄ°\ÄBÄ8BÄ¢\ÄBÄ\ÄBÄ8√ÄI-PANE\ÄBÄ8BÄ¨\ÄBÄ8iÅSAVE-BITSÄBÄÃ\ÄBÄ8BÄ\ÄBÄ8©ÄOFFÄ\ÄBÄ8BÄ*\ÄÄBÄ,BÄ-ÏÅRtms InterfaceBÄ/p¿BÄ0ÏÄMEDFNT\ÄBÄ8BÄ(FÄ\ÄBÄ8BÄ4\ÄBÄp¿BÄ0ÏÄMEDFNB\Äp¿BÄ¯¨ÅXR-BQ-LIST*Ä\ÄBÄ8BÄÚ\ÄBÄ8BÄ;\ÄBÄ8BÄ4\ÄBÄp¿BÄ0ÏÄHL12BÄ\ÄBÄ8\Ä©ÄROWSFÄBÄ*BÄ:©ÅCONSTRAINTSÄ\ÄBÄ8\Ä\ÄÉÄMAIN\ÄBÄBÄABÄÚ\Ä\ÄBÄÚFÄÈÄLINESÄ\Ä\ÄBÄ®ÄL?ÕÃ\Ä\ÄBÄA©ÄEVEN\ÄÈÅINIT-KEYWORDSÄBÄ˙BÄ˚Ä\ÄBÄ^BÄ‡©ÇHANDLE-UNKNOWN-INPUTÄÎÄ=.ôÜ¿ø√≥FÄk¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄs\ÄBÄmBÄ:\ÄÉÄITEMp¿BÄ¯¨Å.CASE.ITEM.ÄBÄÄ\ÄBÄí\ÄÍÄFOURTHÍÄFIRSTÄBÄïBÄñÄBÄ‡ÄÍÅ*TERMINAL-IO*Äë1Ä]Äp¿BÄ¯lÉFLAVOR-VAR-SELF-REF-INDEXÄ]ÄBÄ8]ÄBÄ‡p¿BÄU,ÇINPUT-MECHANISMÄ¿p¿BÄu¨ÄBEEP“)ÇSEND-IF-HANDLESÄ¿iÅFRESH-LINE¿¨Ä ** ¿™ÅWRITE-STRING“1Ä]ÄBÄà]ÄBÄ8]ÄBÄ‡p¿BÄUÏÅERROR-MESSAGEÄ¿lÇUnrecognized input¿ÍÄPRINCÄ“1Ä]ÄBÄà]ÄBÄ8]ÄBÄ‡p¿BÄUlÅKBD-INPUTÄ¿√ÅHELP-LINE-AREA“CÇHELP-LINE-AREA-MOD“CÇHELP-LINE-AREA-DEL“ÍÄSTRING“ÉÅHELP-OBJECTÄ“*ÇREAD-FROM-STRING“ÅRETRIEVE“ÉÅHELP-MODIFYÄíFÄ¿p¿BÄU¨ÄMENU¿p¿BÄUÏÅKEY-OR-BUTTONÄ¿p¿BÄUÏÄTYPEIN¿FÄ¿FÄ ¿FÄ|¿FÄ}¿FÄ~ÄFÄ¿iÅLINE-AREAÄ¿BÄü¿BÄ°¿BÄ¢¿BÄ†¿FÄ¿FÄ”¿FÄé¿FÄô¿FÄ¢¿FÄ´¿FÄ¥ÄFÄ¿•ÄÄ¿•ÄÄ¿•ÄÄ	¿FÄ¿FÄò¿FÄí¿FÄî¿FÄñÄFÄ¿BÄ¡¿•ÄÄ¿FÄ¿FÄ ¿FÄ∏¿FÄ¡ÄPrÑÑPPêÄ	P
-àP‚PàR4I‰RA√ rPBB√-rVåVåVåRV@√ˇ5‰@W¸@QäåV@√ˇ5‰@W¸@QäåV@√ˇ5‰@W¸@QäåPBB√6rV@√Å‰@Qäå@QåV@√Å‰@Qäå@QåV@√ˇ5‰@W¸@QäåÑROÄŒBÄsÄÄ\ÄBÄ^BÄ‡ÇACTIVE-DATABASEÄÄÎÄ	ÜÄ@	DFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄœ\ÄBÄmBÄ:BÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛láReturns the name of the active database. (ACTIVE-DATABASE)ÄBÄõë©ÅAPPEND-ITEMÄ¿lÄ~S¿\ÄBÄ–¿ÍÄFORMAT“BÄ–íP@¡Pˇ€PPö@ëP@¡Pˇ€PÇö@ïOÄ‡BÄœÄ1Ä\ÄjÄOR\Äp¿BÄU,ÉRE-USE-COMMAND-INSTANCE?\ÄBÄ8\ÄBÄ^BÄ‡BÄ–\ÄBÄ8\ÄÈÄNAMESÄ,ÇActive DatabaseÄiÅDEFINITIONBÄÁ)ÅDEFNAMEÄBÄÁ©ÄKEYS\Ä\Ä•Ä F•Ä ABÄ˛,ÖReturns the name of the active database.ÈÄMENUSÄ\Ä\ÄBÄaÈÄCOLUMNÏÅOther Features©ÅDESCRIPTIONÄBÄ€\ÄBÄ8p¿BÄU,ÅCOMMANDÄ\Äp¿BÄulÇINSTANTIATE-FLAVOR\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄÎBÄÏBÄÁBÄÌBÄÁBÄÓBÄÔBÄ˛BÄÛBÄÙBÄıBÄ˘BÄ€BÄÃÄ\ÄBÄ^BÄ‡CÇABORT-TRANSACTIONÄÄÎÄ	ÜÄ@	DFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ\ÄBÄmBÄ:BÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛làTerminates the special transaction processing. (ABORT-TRANSACTION)ÄBÄõëBÄ‹¿lÄ~S¿\ÄBÄ¿BÄﬂ“BÄíP@¡Pˇ€PPö@ëP@¡Pˇ€PÇö@ïOÄBÄÄ1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄ\ÄBÄ8\ÄBÄÍlÇAbort TransactionÄBÄÏBÄBÄÌBÄBÄÓ\Ä\Ä•Ä TBÄÚBÄ˛ÏÖTerminates the special transaction processing.BÄÙ\Ä\ÄBÄaBÄ˜ÏÅOther FeaturesBÄ˘BÄ\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄBÄÏBÄBÄÌBÄBÄÓBÄBÄ˛BÄBÄÙBÄBÄ˘BÄBÄÃÄ\ÄBÄ^BÄ‡CÇBEGIN-TRANSACTIONÄÄÎÄ	ÜÄ@	DFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ(\ÄBÄmBÄ:BÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛ÏáBegins the special transaction processing. (BEGIN-TRANSACTION)ÄBÄõëBÄ‹¿lÄ~S¿\ÄBÄ)¿BÄﬂ“BÄ)íP@¡Pˇ€PPö@ëP@¡Pˇ€PÇö@ïOÄ7BÄ(Ä1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄ)\ÄBÄ8\ÄBÄÍlÇBegin TransactionÄBÄÏBÄ;BÄÌBÄ;BÄÓ\Ä\ÄBÄ•Ä BBÄ˛lÖBegins the special transaction processing.BÄÙ\Ä\ÄBÄaBÄ˜ÏÅOther FeaturesBÄ˘BÄ4\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄ>BÄÏBÄ;BÄÌBÄ;BÄÓBÄ?BÄ˛BÄBBÄÙBÄCBÄ˘BÄ4BÄÃÄ\ÄBÄ^BÄ‡ÇEND-TRANSACTIONÄÄÎÄ	ÜÄ@	DFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄL\ÄBÄmBÄ:BÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛ÏèExecutes the database calls postponed due to special transaction processing and terminates the transaction.  (END-TRANSACTION)ÄBÄõëBÄ‹¿lÄ~S¿\ÄBÄM¿BÄﬂ“BÄMíP@¡Pˇ€PPö@ëP@¡Pˇ€PÇö@ïOÄ[BÄLÄ1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄM\ÄBÄ8\ÄBÄÍ,ÇEnd TransactionÄBÄÏBÄ_BÄÌBÄ_BÄÓ\Ä\ÄBÄ•Ä EBÄ˛¨
-Executes the database calls postponed due to special transaction processing and terminates the transaction.ÄBÄÙ\Ä\ÄBÄaBÄ˜ÏÅOther FeaturesBÄ˘BÄX\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄbBÄÏBÄ_BÄÌBÄ_BÄÓBÄcBÄ˛BÄfBÄÙBÄgBÄ˘BÄXBÄÃÄ\ÄBÄ^BÄ‡CÇENVIRONMENT-STATUSÄÎÄ	ÜÄ@	DFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄp\ÄBÄmBÄ:BÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛ÏàReturns the values of the environment variables. (ENVIRONMENT-STATUS)ÄÄBÄõëBÄ‹¿lÄ~S¿\ÄBÄq¿BÄﬂ“BÄqíP@¡Pˇ€PPö@ëÑOÄBÄpÄ1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄq\ÄBÄ8\ÄBÄÍlÇEnvironment StatusBÄÏBÄÉBÄÌBÄÉBÄÓ\Ä\ÄBÄÒBÄeBÄ˛,ÜReturns the values of the environment variables.BÄÙ\Ä\ÄBÄaBÄ˜ÏÅOther FeaturesBÄ˘BÄ|\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄÜBÄÏBÄÉBÄÌBÄÉBÄÓBÄáBÄ˛BÄ BÄÙBÄäBÄ˘BÄ|BÄÃÄ\ÄBÄ^BÄ‡ÇATTACH-RELATIONÄÄÎÄ5ÜÄB»FÄ$¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄì\ÄBÄmBÄ†ÉÄATTÄÉÄPATHÉÄTUPÄÉÄDIRÄÉÄDOCÄÉÄKEYÄÉÄIMPÄCÄSSÉÄMEMÄBÄ:\ÄÅKEYWORDSBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛ÏøŸAttach some existing data to relation.
-
-   RELATION-NAME - The name of the relation to which the data is to be attached.
-   ATTRIBUTES    - A list that describes the attributes in this relation.
-   DIRECTORY     - The directory in which RTMS saves the attached data.
-   DOCUMENTATION - A string that describes the specified relation.
-   FORMAT        - A list corresponding to the ATTRIBUTES specifying their print width.
-   IMPLEMENTATION-TYPE - Name of the implementation type.
-   KEY           - A list of attributes that are to form the key.
-   MEMORY        - Specifies a variable where the data to be attached is stored.
-   PATHNAME      - If the data is stored in a file, specify its name here.
-   STORAGE-STRUCTURE - Name of the storage-structure type.  (ATTACH-RELATION RELATION-NAME &REST KEYWORD-LIST &KEY &OPTIONAL ATTRIBUTES DIRECTORY DOCUMENTATION FORMAT IMPLEMENTATION-TYPE KEY MEMORY PATHNAME STORAGE-STRUCTURE &ALLOW-OTHER-KEYS)ÄÄBÄõëBÄ‹¿lÄ~S¿BÄî¿BÄﬂ¿BÄ†¿BÄ°¿BÄû¿BÄ¢¿BÄ£¿ÉÄSTOÄ¿BÄù¿BÄ•¿™ÄLIST“BÄﬂ“BÄîíPA¡Pˇ€PPÅQPÑQPÖQ	PÜQ
-PÉQPáQPàQP QPÇQPäQJ∫@√ööAëÅQ@QîOÄÆBÄìÄ1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄî\ÄBÄ8\ÄBÄÍ,ÇAttach RelationÄBÄÏBÄ≤BÄÌBÄ≤BÄÓ\ÄBÄÚBÄ˛lÉused to attach a relation.BÄÙ\Ä\ÄBÄaBÄ˜lÅDefinitioniÅARGUMENTSÄ\ÄÈÅUSER-SUPPLIEDÄ\ÄÄ*ÏÅRelation Name:)ÅDEFAULTÄBÄ:©ÄTYPE\ÄBÄ˛¨ÑName of the relation to be attached.©ÄSEXP\ÄÄ*lÉAttribute descriptor pair:BÄ¿BÄ∞BÄ¡\ÄBÄ˛,ùList of attributes and their domains default, and documentation. EX. (a1 (dom <something> def <something>) a2) . If any values are not given there is a default for everything. So, the minimum necessary input is a list of attributes.BÄƒ\ÄÄ*lÅPathname:ÄBÄ¿BÄñBÄ¡\ÄBÄ˛¨ÑSpecify the name of the input file.ÄBÄƒ\ÄÄ*ÏÅTuple Format :BÄ¿BÄíBÄ¡\ÄBÄ˛,îSpecify the tuple format as a list of numbers representing the column width for each attribute. If not specified, the default format for this relation is used.ÄBÄƒ\ÄÄ*lÅDirectory:BÄ¿BÄüBÄ¡\ÄBÄ˛¨ÖSpecify the save directory for the relation.BÄƒ\ÄÄ*ÏÅDocumentation:BÄ¿lÄ..BÄ¡\ÄBÄ˛¨ÖSpecify the documentation for this relation.BÄ-\ÄÄ*¨ÄKey:BÄ¿BÄπBÄ¡\ÄBÄ˛,ÖSpecify the key as a list of attributes.BÄƒ\ÄÄ*¨ÇImplementation Type:BÄ¿BÄΩBÄ¡\ÄBÄ˛,ÑSpecify the implementation type.BÄƒ\ÄÄ*lÇStorage Structure:BÄ¿BÄ¬BÄ¡\ÄBÄ˛¨ÑSpecify the storage structure type.ÄBÄƒ\ÄÄ*,ÅMemory:ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛,åIf the data is stored in the memory, then give the name of the variable that contains the data.ÄBÄƒBÄ*¨ÑGive parameters for ATTACH RELATION:BÄ˘BÄ™\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄµBÄÏBÄ≤BÄÌBÄ≤BÄÓBÄ∂BÄ˛BÄ∑BÄÙBÄ∏BÄªBÄºBÄ˘BÄ™BÄÃÄ\ÄBÄ^BÄ‡ÇRENAME-ATTRIBUTEÄÎÄÜÄ@ƒFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄÒ\ÄBÄmBÄ†ÅOLD-NEWÄBÄ:BÄ:\ÄÄí\ÄBÄUBÄïBÄoBÄ‡BÄ˛,®Use this function to rename attributes in a relation.
-
-   RELATION-NAME  - Name of the relation whose attributes are to be renamed.
-   ATTRIBUTES     - Specify old-attribute and new-attribute names.
-
-   Example: (RENAME-ATTRIBUTE 'parts 'number 'id 'name 'description).  (RENAME-ATTRIBUTE RELATION-NAME &REST ATTRIBUTES)ÄBÄõëBÄ‹¿lÄ~S¿BÄÚ¿ÍÄLIST*Ä“BÄﬂ“CÇRENAME-ATTRIBUTE*Ä¿™ÄEVALíP@¡Pˇ€PPÅQÇQöö@ë	PÅQÇQö
-åOÄBÄÒÄ1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄÚ\ÄBÄ8\ÄBÄÍ,ÇRename AttributeBÄÏBÄBÄÌBÄBÄÓ\Ä\Ä•Ä RBÄÚBÄ˛,Öused to rename attributes in a relation.BÄÙ\Ä\ÄBÄaBÄ˜ÏÅOther FeaturesBÄª\ÄBÄΩ\ÄÄ*ÏÅRelation Name:BÄ¿BÄ~BÄ¡\ÄBÄ˛,áName of the relation whose attributes are to be renamed.BÄƒ\ÄÄ*,ÑAttributes and their new names:ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛ÏäSpecify a list of the attributes and their new names. For ex. (a1 new-a1 a2 new-a2...)BÄƒBÄ*ÏÑGive parameters for RENAME ATTRIBUTE:ÄBÄ˘BÄ˛\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄ
-BÄÏBÄBÄÌBÄBÄÓBÄBÄ˛BÄBÄÙBÄBÄªBÄBÄ˘BÄ˛BÄÃÄ\ÄBÄ^BÄ‡ÇRENAME-RELATIONÄÄÎÄ
-ÜÄ@
-ÑFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ"\ÄBÄmBÄ˚BÄ:BÄ:\ÄÄí\Äp¿BÄ¯lÅXR-BQ-CONSBÄïBÄoBÄ‡BÄ˛lóRename relations in the active database.
-
-   RELATIONS - Specify <old-rel-name new-rel-name>
-
-   Example: (RENAME-RELATION rel1 new-rel1 rel2 new-rel2)  (RENAME-RELATION &REST RELATIONS)ÄBÄõëBÄ‹¿lÄ~S¿BÄ#¿BÄﬂ“ÇRENAME-RELATION*¿BÄíP@¡Pˇ€PPÅ]ö@ëPÅ]	åOÄ3BÄ"Ä1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄ#\ÄBÄ8\ÄBÄÍ,ÇRename RelationÄBÄÏBÄ7BÄÌBÄ7BÄÓ\Ä\ÄBÄBÄBÄ˛lÜused to rename relations in the current database.ÄBÄÙ\Ä\ÄBÄaBÄ˜ÏÅOther FeaturesBÄª\ÄBÄΩ\ÄÄ*ÏÉRelations and their new names:BÄ¿BÄ:BÄ¡\ÄBÄ˛låSpecify a list of the relations and their new names. For ex. (rel-1 new-rel-1 rel-2 new-rel-2...)ÄBÄƒBÄ*¨ÑGive parameters for RENAME RELATION:BÄ˘BÄ0\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄ:BÄÏBÄ7BÄÌBÄ7BÄÓBÄ;BÄ˛BÄ=BÄÙBÄ>BÄªBÄABÄ˘BÄ0BÄÃÄ\ÄBÄ^BÄ‡ÇRENAME-DATABASEÄÄÎÄ
-ÜÄ@
-ÑFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄM\ÄBÄmBÄ˚BÄ:BÄ:\ÄÄí\ÄBÄ/BÄïBÄoBÄ‡BÄ˛lôUsed to rename a database.
-
-   DATABASES - Specify old-database-name and new-database-name.
-
-   Example: (RENAME-DATABASE parts suppliers micro-parts micro-suppliers).  (RENAME-DATABASE &REST DATABASES)ÄBÄõëBÄ‹¿lÄ~S¿BÄN¿BÄﬂ“ÇRENAME-DATABASE*¿BÄíP@¡Pˇ€PPÅ]ö@ëPÅ]	åOÄ\BÄMÄ1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄN\ÄBÄ8\ÄBÄÍ,ÇRename DatabaseÄBÄÏBÄ`BÄÌBÄ`BÄÓ\Ä\ÄBÄ•Ä@DBÄ˛lÉused to rename databases.ÄBÄÙ\Ä\ÄBÄaBÄ˜ÏÅOther FeaturesBÄª\ÄBÄΩ\ÄÄ*ÏÉDatabases and their new names:BÄ¿BÄ:BÄ¡\ÄBÄ˛ÏãSpecify a list of the databases and their new names. For ex. (db-1 new-db-1 db-2 new-db-2...)ÄBÄƒBÄ*¨ÑGive parameters for RENAME DATABASE:BÄ˘BÄY\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄcBÄÏBÄ`BÄÌBÄ`BÄÓBÄdBÄ˛BÄgBÄÙBÄhBÄªBÄkBÄ˘BÄYBÄÃÄ\ÄBÄ^BÄ‡ÇDETACH-RELATIONÄÄÎÄ#ÜÄAHFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄw\ÄBÄmBÄ†BÄûBÄ•ÉÄDISKBÄ:\ÄBÄßBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛Ïø1Detach data in an existing relation into a variable or onto the disk.
-
-   RELATION-NAME - The name of the relation from which the data is to be detached.
-   DISK          - If T, RTMS stores the data in the file specified in the PATHNAME.
-   MEMORY        - If set to T, the detached data is stored in the variable rtms:*attach-detach-data*.
-                   If any variable name is supplied, the data will be stored in it.
-   PATHNAME      - Name of the file in which the detached data is to be saved.  (DETACH-RELATION RELATION-NAME &REST KEYWORD-LIST &KEY &OPTIONAL DISK MEMORY PATHNAME &ALLOW-OTHER-KEYS)ÄBÄõëBÄ‹¿lÄ~S¿BÄx¿BÄû¿BÄ•¿BÄÅ¿BÄ≠“BÄﬂ“BÄxíPA¡Pˇ€PPÅQPÇQPÉQ	PÑQ
-≤@√
-ööAëÅQ@QîOÄáBÄwÄ1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄx\ÄBÄ8\ÄBÄÍ,ÇDetach RelationÄBÄÏBÄãBÄÌBÄãBÄÓ\Ä•Ä DBÄ˛lÉused to detach a relation.BÄÙ\Ä\ÄBÄaBÄ˜lÅDefinitionBÄª\ÄBÄΩ\ÄÄ*ÏÅRelation Name:BÄ¿BÄ:BÄ¡\ÄBÄ˛¨ÑName of the relation to be Detached.BÄƒ\ÄÄ*lÅPathname:ÄBÄ¿BÄñBÄ¡\ÄBÄ˛¨áSpecify the name of the file where the data is to be stored.BÄƒ\ÄÄ*,ÅMemory:ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛¨ãIf the data is to be in the memory and not save it on the disk, give the name of a variable.BÄƒ\ÄÄ*ÏÄDisk:ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛,äIndicate if files corresponding to the relation are to be deleted from the disk.)ÅBOOLEANÄBÄ*¨ÑGive parameters for DETACH RELATION:BÄ˘BÄÖ\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄéBÄÏBÄãBÄÌBÄãBÄÓBÄèBÄ˛BÄëBÄÙBÄíBÄªBÄïBÄ˘BÄÖBÄÃÄ\ÄBÄ^BÄ‡√ÅINSERT-TUPLESÄÄÎÄ#ÜÄAHFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄÆ\ÄBÄm√ÅRELATION-NAMEÄ√ÅLIST-OF-TUPLESCÅATTRIBUTES*ÅPATHNAMEBÄ:\ÄBÄßBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛Ïø$Insert a list of tuples or data from a file.
-
-   RELATION-NAME   - Name of the relation into which the data is to be inserted.
-   TUPLES     - List of tuples to be inserted. Tuples are expected to be in the list-of-values format.
-   ATTRIBUTES - If the values in the tuples do not correspond to the attribute-list specified during
-                relation-defintion, specify a list of attributes to determine the order.
-   PATHNAME   - If the data is in a file, specify the name of the file.  (INSERT RELATION-NAME &REST KEYWORD-LIST &KEY TUPLES ATTRIBUTES PATHNAME &ALLOW-OTHER-KEYS)ÄBÄõëBÄ‹¿lÄ~S¿√ÄINSERT¿√ÄTUPLES¿ÉÄATTR¿BÄû¿BÄ≠“BÄﬂ“BÄ¡íPA¡Pˇ€PPÅQPÇQPÉQ	PÑQ
-≤@√
-ööAëÅQ@QîOÄƒBÄÆÄ1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄØ\ÄBÄ8\ÄBÄÍÏÅInsert TuplesÄBÄÏBÄ»BÄÌBÄ»BÄÓ\Ä•Ä IBÄ˛¨ÜUsed to insert a list of tuples in a given relation.BÄÙ\Ä\ÄBÄaBÄ˜lÅDefinitionBÄª\ÄBÄΩ\ÄÄ*ÏÅRelation Name:BÄ¿BÄ~BÄ¡\ÄBÄ˛ÏáSpecify the relation into which the tuples are to be inserted.BÄƒ\ÄÄ*,ÇList of tuples:ÄBÄ¿BÄÇBÄ¡\ÄBÄ˛ÏÑGive a list of tuples to be inserted.ÄBÄƒ\ÄÄ*¨ÅAttributes:ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛¨åIf a list of attributes is provided, then values in the tuples are assumed to be in the same order.ÄBÄƒ\ÄÄ*lÅPathname:ÄBÄ¿BÄñBÄ¡\ÄBÄ˛¨äIf a list of tuples is not provided, then specify the file which contains the data.ÄBÄƒBÄ*ÏÑGive parameters for INSERTING TUPLES:ÄBÄ˘BÄø\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄÀBÄÏBÄ»BÄÌBÄ»BÄÓBÄÃBÄ˛BÄŒBÄÙBÄœBÄªBÄ“BÄ˘BÄøBÄÃÄ\ÄBÄ^BÄ‡ÅMAPTUPLEÄÎÄÜÄ@ƒFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄÍ\ÄBÄmBÄ†CÅDBFUNCTIONBÄ:BÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛ÏòMap a function on all the tuples in a relation using MAPCAR.
-
-   DBFUNCTION  - Function to be applied to each and every tuple.
-   RELATION    - Name of the relation.  (MAPTUPLE DBFUNCTION RELATION)ÄÄBÄõëBÄ‹¿lÄ~S¿BÄÎ¿BÄ≠“BÄﬂ“BÄ“BÄÎíP@¡Pˇ€PPÇQÅQöö@ëÇQ	äÅQ
-îOÄ˘BÄÍÄ1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄÎ\ÄBÄ8\ÄBÄÍ,ÅMaptupleBÄÏBÄ˝BÄÌBÄ˝BÄÓ\Ä\ÄBÄÒ•Ä MBÄ˛¨àMaps a given function on all the tuples in a relation using MAPCAR.ÄBÄÙ\Ä\ÄBÄaBÄ˜ÏÅOther FeaturesBÄª\ÄBÄΩ\ÄÄ*ÏÅRelation Name:BÄ¿BÄ~BÄ¡\ÄBÄ˛,ÑGive the relation to be mapped.ÄBÄƒ\ÄÄ*¨ÇFunction DefinitionÄBÄ¿BÄäBÄ¡\ÄBÄ˛ÏÉSpecify a function definition.BÄƒBÄ*lÖMap a function on all tuples using MAPCAR:BÄ˘BÄ˜\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄBÄÏBÄ˝BÄÌBÄ˝BÄÓBÄBÄ˛BÄBÄÙBÄBÄªBÄBÄ˘BÄ˜BÄÃÄ\ÄBÄ^BÄ‡ÉÄMAPTÄÎÄÜÄ@ƒFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ\ÄBÄmBÄ†BÄÙBÄ:BÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛,òMap a function on all the tuples in a relation using MAPC.
-
-   DBFUNCTION  - Function to be applied to each and every tuple.
-   RELATION    - Name of the relation.  (MAPT DBFUNCTION RELATION)ÄÄBÄõëBÄ‹¿lÄ~S¿BÄ¿BÄ≠“BÄﬂ“BÄ“BÄíP@¡Pˇ€PPÇQÅQöö@ëÇQ	äÅQ
-îOÄ&BÄÄ1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄ\ÄBÄ8\ÄBÄÍ¨ÄMaptBÄÏBÄ*BÄÌBÄ*BÄÓ\Ä•Ä`FBÄ˛làMaps a given function on all the tuples in a relation using MAPC.ÄBÄÙ\Ä\ÄBÄaBÄ˜ÏÅOther FeaturesBÄª\ÄBÄΩ\ÄÄ*ÏÅRelation Name:BÄ¿BÄ~BÄ¡\ÄBÄ˛,ÑGive the relation to be mapped.ÄBÄƒ\ÄÄ*¨ÇFunction DefinitionÄBÄ¿BÄäBÄ¡\ÄBÄ˛ÏÉSpecify a function definition.BÄƒBÄ*,ÖMap a function on all tuples using MAPC:BÄ˘BÄ$\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄ-BÄÏBÄ*BÄÌBÄ*BÄÓBÄ.BÄ˛BÄ0BÄÙBÄ1BÄªBÄ4BÄ˘BÄ$BÄÃÄ\ÄBÄ^BÄ‡√ÅPRINT-RELATIONÄÎÄPÜÄ‡FÄ6¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄD\ÄBÄmBÄ†ÉÄINTOBÄ†BÄ°BÄ¢BÄ£BÄ¨√ÄQPRINTÅTO-FILEÄ™ÄSORTBÄﬂÉÄWIDEÍÄNUMBERÍÄPRINTÄBÄ¬√ÄQSORTÄÍÄSTREAM√ÄUNIQUEBÄ:\ÄBÄßBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛ÏøSame as Retrieve without a where clause and all attributes are retrieved.
-
-   RELATION-NAME        - Name of the relation whose tuples are to be retrieved.
-   INTO                 - If the result is to be inserted in a relation, specify the name of that relation.
-                          If the above relation is not defined, RTMS defines it with the following keywords.
-   DIRECTORY            - Save directory for this relation.
-   DOCUMENTATION        - Documentation for this relation.
-   FORMAT               - List of print widths for the attributes in this relation.
-   IMPLEMENTATION-TYPE  - Name of the implementation type to be used.
-   INDEX-NAME           - Name of the index to use in the retrieval.
-   KEY                  - List of the resultant attributes to form the key for this relation.
-   STORAGE-STRUCTURE    - Name of the storage-structure.
-   WIDE                 - If T, result is printed out in Attribute: value format rather than as a table.
-   NUMBER               - If WIDE is T, this keyword specifies the number of attributes per line.
-   OUTPUT               - If the result is to be sent to a file, specify the file-name.
-   PRINT                - If NIL, the result is not printed.
-   QPRINT               - If T, the result is printed without formatting.
-   QUICK-SORT           - Specifies the attributes to sort the result on.
-   SORT                 - If any domain-specific, user-defined sort mechanism is to be used, this keyword
-                          can be used.
-   STREAM               - Specify the window to which the output is to be sent, if it is different than the
-                          the *standard-output* or RTMS-interface.
-   TUPLES               - If T, the resultant tuples are returned.
-   UNIQUE               - If T, only unique tuples are retrieved.  (PRINT-RELATION RELATION &REST KEYWORD-LIST &KEY &OPTIONAL DIRECTORY DOCUMENTATION FORMAT IMPLEMENTATION-TYPE INDEX-NAME INTO KEY NUMBER OUTPUT PRINT QPRINT QUICK-SORT SORT STREAM STORAGE-STRUCTURE TUPLES UNIQUE WIDE &ALLOW-OTHER-KEYS)Ä¿ÜÄÇiÄBÄõëBÄ‹¿lÄ~S¿BÄ®¿BÄ†¿BÄ°¿BÄN¿BÄO¿√ÅOUTPUT-TO-FILE¿BÄQ¿BÄﬂ¿BÄR¿ÉÄNUMÄ¿BÄ¢¿BÄT¿BÄ¬¿CÅQUICK-SORT¿BÄV¿BÄW¿BÄ£¿BÄ¨¿BÄ≠“BÄﬂ“BÄ®íPA¡Pˇ€PPÅQPÉQ	PÑQ
-PÇQPà?BP QPäQPãQPåQP
-QPÖQPéQPèQPêQPëQPíQPÜQPáQ"J∫@√ööAëÅQ@QîOÄaBÄDÄ1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄE\ÄBÄ8\ÄBÄÍÏÅPrint RelationBÄÏBÄeBÄÌBÄeBÄÓ\Ä\ÄBÄÒ•Ä PBÄ˛¨ÑUsed to print tuples in a relation.ÄBÄÙ\Ä\ÄBÄaBÄ˜ÏÅOther FeaturesBÄª\ÄBÄΩ\ÄÄ*lÅRelation: BÄ¿BÄ~BÄ¡\ÄBÄ˛¨ÜSpecify a relation whose tuples are to be retrieved.BÄƒ\ÄÄ*ÏÄINTO :BÄ¿BÄ‹BÄ¡\ÄBÄ˛,
-Specify the relation to insert the resultant tuples into. If none specified, they are just printed out.ÄBÄƒBÄ—\ÄÄ*ÏÅDocumentation:BÄ¿BÄ¥BÄ¡\ÄBÄ˛lÜSpecify the documentation for the output relation.BÄ-BÄ⁄BÄﬁBÄ‚\ÄÄ*lÇFormatted Output: BÄ¿BÄÃBÄ¡\ÄBÄ˛¨ãShould the tuples returned be formatted?. If no, tuples are printed in the interaction pane.BÄ¶\ÄÄ*¨ÅOutput File:BÄ¿BÄñBÄ¡\ÄBÄ˛láIf the output is to be sent to a file, specify a pathname.BÄƒ\ÄÄ*ÏÄSort: BÄ¿BÄÌBÄ¡\ÄBÄ˛¨åShould the output be sorted? Legal values are: (<attribute-name order>) - order could be ASC or DES.BÄƒBÄÕ\ÄÄ*ÏÅWide-Format :ÄBÄ¿BÄ‰BÄ¡\ÄBÄ˛¨èShould the tuples be printed in wide format instead of tabular format? - Wide format will be of the type <attribute: value>.BÄ¶\ÄÄ*ÏÉNumber of attributes per line:BÄ¿BÄËBÄ¡\ÄBÄ˛,ëHow many attributes per line if the tuples are printed using wide format?. Default is -1 indicating as many tuples per line as possible.ÈÄNUMBER\ÄÄ*,ÅPrint?:ÄBÄ¿BÄÃBÄ¡\ÄBÄ˛ÏÑShould the results be printed or not?ÄBÄ¶\ÄÄ*,ÅTuples:ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛¨ÜShould the results be returned as a list of tuples?ÄBÄ¶\ÄÄ*¨ÅQuick Sort:ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛ÏäSimilar to sort except that it does not take user defined domains into consideration.ÄBÄƒ\ÄÄ*,ÅStream:ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛ÏãIf the output is to be sent to a stream other than the output window, specify the stream name.BÄƒ\ÄÄ*,ÅUnique?:BÄ¿BÄ:BÄ¡\ÄBÄ˛láIf only unique tuples are desired, then this must be true.BÄ¶BÄ*ÏÑGive parameters for PRINT RELATION ==>BÄ˘BÄ[\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄhBÄÏBÄeBÄÌBÄeBÄÓBÄiBÄ˛BÄlBÄÙBÄmBÄªBÄpBÄ˘BÄ[BÄÃÄ\ÄBÄ^BÄ‡√ÅLOAD-DATABASEÄÄÎÄ	ÜÄ@ƒFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ≠\ÄBÄmBÄ°jÅDIRECTORYÄBÄ:BÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛l°A database saved on the disk can be loaded using this function.
-
-   DBNAME    - Name of the database to be restored.
-   DIRECTORY - Name of the directory in which it can be found.  (LOAD-DATABASE DBNAME &REST KEYWORD-LIST &KEY &OPTIONAL DIRECTORY &ALLOW-OTHER-KEYS)ÄÄBÄõëBÄ‹¿lÄ~S¿BÄÆ¿BÄ†¿BÄ≠“BÄﬂ“BÄÆíP@¡Pˇ€PPÅQPÇQíö	ö@ëÅQPÇQí
-îOÄºBÄ≠Ä1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄÆ\ÄBÄ8\ÄBÄÍÏÅLoad DatabaseÄBÄÏBÄ¿BÄÌBÄ¿BÄÓ\Ä\Ä•Ä LBÄêBÄ˛ÏÖUsed to load database from a given directory.ÄBÄÙ\Ä\ÄBÄaBÄ˜lÅDefinitionBÄª\ÄBÄΩ\ÄÄ*ÏÅDatabase Name:BÄ¿BÄöBÄ¡\ÄBÄ˛lÑName of the database to be loaded.BÄƒ\ÄÄ*,ÇDirectory Name:ÄBÄ¿BÄüBÄ¡\ÄBÄ˛¨ÖName of the directory in which it is stored.BÄƒBÄ*lÑGive parameters for LOAD DATABASE:BÄ˘BÄ∫\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄ√BÄÏBÄ¿BÄÌBÄ¿BÄÓBÄƒBÄ˛BÄ«BÄÙBÄ»BÄªBÄÀBÄ˘BÄ∫BÄÃÄ\ÄBÄ^BÄ‡ÇLOAD-ENVIRONMENTÄÎÄ	ÜÄ@ƒFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ€\ÄBÄmÉÅENVIRONMENTÄBÄ∑BÄ:BÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛lùLoad a saved environment.
-
-   ENVNAME   - Name of the environment to be restored.
-   DIRECTORY - Name of the directory in which it can be found.  (LOAD-ENVIRONMENT ENVNAME &REST KEYWORD-LIST &KEY &OPTIONAL DIRECTORY &ALLOW-OTHER-KEYS)ÄBÄõëBÄ‹¿lÄ~S¿BÄ‹¿BÄ†¿BÄ≠“BÄﬂ“BÄ‹íP@¡Pˇ€PPÅQPÇQíö	ö@ëÅQPÇQí
-îOÄÍBÄ€Ä1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄ‹\ÄBÄ8\ÄBÄÍ,ÇLoad EnvironmentBÄÏBÄÓBÄÌBÄÓBÄÓ\Ä\ÄBÄ∆BÄeBÄ˛,ÜUsed to load environment from a given directory.BÄÙ\Ä\ÄBÄaBÄ˜lÅDefinitionBÄª\ÄBÄΩ\ÄÄ*lÇEnvironment Name:ÄBÄ¿BÄöBÄ¡\ÄBÄ˛ÏÑName of the environment to be loaded.ÄBÄƒ\ÄÄ*,ÇDirectory Name:ÄBÄ¿BÄüBÄ¡\ÄBÄ˛¨ÖName of the directory in which it is stored.BÄƒBÄ*ÏÑGive parameters for LOAD ENVIRONMENT:ÄBÄ˘BÄË\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄÒBÄÏBÄÓBÄÌBÄÓBÄÓBÄÚBÄ˛BÄÙBÄÙBÄıBÄªBÄ¯BÄ˘BÄËBÄÃÄ\ÄBÄ^BÄ‡√ÅLOAD-RELATIONÄÄÎÄ	ÜÄ@ƒFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ\ÄBÄmBÄ†BÄ∑BÄ:BÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛ÏûLoad a saved relation.
-
-   RELATION-NAME    - Name of the relation to be restored.
-   DIRECTORY        - Name of the directory in which it can be found.  (LOAD-RELATION RELATION-NAME &REST KEYWORD-LIST &KEY &OPTIONAL DIRECTORY &ALLOW-OTHER-KEYS)ÄÄBÄõëBÄ‹¿lÄ~S¿BÄ	¿BÄ†¿BÄ≠“BÄﬂ“BÄ	íP@¡Pˇ€PPÅQPÇQíö	ö@ëÅQPÇQí
-îOÄÄÄ1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄ	\ÄBÄ8\ÄBÄÍÏÅLoad RelationÄBÄÏBÄÄÌBÄÄÓ\Ä\ÄBÄ∆BÄBÄ˛,ÜUsed to load a relation from a given directory.ÄBÄÙ\Ä\ÄBÄaBÄ˜lÅDefinitionBÄª\ÄBÄΩ\ÄÄ*ÏÅRelation Name:BÄ¿BÄ~BÄ¡\ÄBÄ˛lÑName of the relation to be loaded.BÄƒ\ÄÄ*,ÇDirectory Name:ÄBÄ¿BÄüBÄ¡\ÄBÄ˛¨ÖName of the directory in which it is saved.ÄBÄƒBÄ*lÑGive parameters for LOAD RELATION:BÄ˘BÄ\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄÄÏBÄÄÌBÄÄÓBÄÄ˛BÄ ÄÙBÄ!ÄªBÄ$Ä˘BÄÄÃÄ\ÄBÄ^BÄ‡√ÅSAVE-DATABASEÄÄÎÄ	ÜÄ@ƒFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ4\ÄBÄmBÄ°BÄ∑BÄ:BÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛l§Save all system relations and the user-defined, modified relations.
-
-   DATABASE-NAME    - Name of the database to be saved.
-   DIRECTORY         - Name of the directory in which it is to be saved.  (SAVE-DATABASE DATABASE-NAME &REST KEYWORD-LIST &KEY &OPTIONAL DIRECTORY &ALLOW-OTHER-KEYS)ÄBÄõëBÄ‹¿lÄ~S¿BÄ5¿BÄ†¿BÄ≠“BÄﬂ“BÄ5íP@¡Pˇ€PPÅQPÇQíö	ö@ëÅQPÇQí
-îOÄBÄ4Ä1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄ5\ÄBÄ8\ÄBÄÍÏÅSave DatabaseÄBÄÏBÄFÄÌBÄFÄÓ\Ä\Ä•Ä SBÄfBÄ˛ÏÖUsed to save a database on a given directory.ÄBÄÙ\Ä\ÄBÄaBÄ˜ÏÅOther FeaturesBÄª\ÄBÄΩ\ÄÄ*ÏÅDatabase Name:BÄ¿BÄöBÄ¡\ÄBÄ˛lÑName of the database to be saved.ÄBÄƒ\ÄÄ*,ÇDirectory Name:ÄBÄ¿BÄüBÄ¡\ÄBÄ˛lÑName of the directory to write to.BÄƒBÄ*lÑGive parameters for SAVE DATABASE:BÄ˘BÄ@\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄIÄÏBÄFÄÌBÄFÄÓBÄJÄ˛BÄMÄÙBÄNÄªBÄQÄ˘BÄ@ÄÃÄ\ÄBÄ^BÄ‡ÇSAVE-ENVIRONMENTÄÎÄ	ÜÄ@ƒFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄa\ÄBÄmBÄÂBÄ∑BÄ:BÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛¨úSave an environment.
-
-   ENVNAME   - Name of the environment to be saved.
-   DIRECTORY - Name of the directory in which it is to be saved.  (SAVE-ENVIRONMENT ENVNAME &REST KEYWORD-LIST &KEY &OPTIONAL DIRECTORY &ALLOW-OTHER-KEYS)ÄBÄõëBÄ‹¿lÄ~S¿BÄb¿BÄ†¿BÄ≠“BÄﬂ“BÄbíP@¡Pˇ€PPÅQPÇQíö	ö@ëÅQPÇQí
-îOÄoÄaÄ1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄb\ÄBÄ8\ÄBÄÍ,ÇSave EnvironmentBÄÏBÄsÄÌBÄsÄÓ\Ä\ÄBÄLÄeBÄ˛lÜUsed to save an environment on a given directory.ÄBÄÙ\Ä\ÄBÄaBÄ˜ÏÅOther FeaturesBÄª\ÄBÄΩ\ÄÄ*lÇEnvironment Name:ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛¨ÑName of the environment to be saved.BÄƒ\ÄÄ*,ÇDirectory Name:ÄBÄ¿BÄüBÄ¡\ÄBÄ˛lÑName of the directory to write to.BÄƒBÄ*ÏÑGive parameters for SAVE environment:ÄBÄ˘BÄm\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄvÄÏBÄsÄÌBÄsÄÓBÄwÄ˛BÄyÄÙBÄzÄªBÄ}Ä˘BÄmÄÃÄ\ÄBÄ^BÄ‡√ÅSAVE-RELATIONÄÄÎÄ#ÜÄAHFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ
-\ÄBÄmBÄ†BÄ∑™ÄTYPEÉÄSAVEBÄ:\ÄBÄßBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛,ºSave a relation if it is modified.
-
-    RELATION-NAME - Name of the relation to be saved.
-    DIRECTORY     - Name of the directory in which it is to be saved.
-    SAVE          - If T, saves the relation even if the relation is not modified.
-    TYPE          - Two types of save are allowed: COMMAND and XLD. This keyword can be used to
-                    specify the type.  (SAVE-RELATION RELATION-NAME &REST KEYWORD-LIST &KEY &OPTIONAL DIRECTORY SAVE TYPE &ALLOW-OTHER-KEYS)ÄÄBÄõëBÄ‹¿lÄ~S¿BÄé¿BÄó¿BÄ†¿BÄò¿BÄ≠“BÄﬂ“BÄéíPA¡Pˇ€PPÅQPÉQPÇQ	PÑQ
-≤@√
-ööAëÅQ@QîOÄûÄ
-Ä1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄé\ÄBÄ8\ÄBÄÍÏÅSave RelationÄBÄÏBÄ¢ÄÌBÄ¢ÄÓ\Ä\ÄBÄLÄBÄ˛ÏÖUsed to save a relation on a given directory.ÄBÄÙ\Ä\ÄBÄaBÄ˜ÏÅOther FeaturesBÄª\ÄBÄΩ\ÄÄ*ÏÅRelation Name:BÄ¿BÄ~BÄ¡\ÄBÄ˛lÑName of the relation to be saved.ÄBÄƒ\ÄÄ*,ÇDirectory Name:ÄBÄ¿BÄüBÄ¡\ÄBÄ˛lÑName of the directory to write to.BÄƒ\ÄÄ*ÏÅType of SAVE:ÄBÄ¿BÄ™BÄ¡\ÄBÄ˛¨ÖSave type. It can be either XLD or COMMAND.ÄBÄƒ\ÄÄ*lÅMust Save:BÄ¿BÄ:BÄ¡\ÄBÄ˛ÏáSave the relation even if the relation has not been modified.ÄBÄ¶BÄ*lÑGive parameters for SAVE RELATION:BÄ˘BÄú\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄ•ÄÏBÄ¢ÄÌBÄ¢ÄÓBÄ¶Ä˛BÄ®ÄÙBÄ©ÄªBÄ¨Ä˘BÄúÄÃÄ\ÄBÄ^BÄ‡ÇSAVE-TRANSACTIONÄÎÄ
- ÜÄAFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄƒ\ÄBÄmÉÅTRANSACTIONÄBÄ∑BÄªBÄ:\ÄBÄßBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛ÏßSave a transaction on disk.
-
-   TRANSACTION - Name of the transaction.
-   DIRECTORY   - Name of the directory in which this transaction is to be stored.
-   PATHNAME    - Name of the file in which it is to be stored.  (SAVE-TRANSACTION TRANSACTION &REST KEYWORD-LIST &KEY &OPTIONAL DIRECTORY PATHNAME &ALLOW-OTHER-KEYS)ÄBÄõëBÄ‹¿lÄ~S¿BÄ≈¿BÄû¿BÄ†¿BÄ≠“BÄﬂ“BÄ≈íPA¡Pˇ€PPÅQPÉQPÇQ	¢@√	ö
-öAëÅQ@QîOÄ‘ÄƒÄ1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄ≈\ÄBÄ8\ÄBÄÍ,ÇSave TransactionBÄÏBÄÿÄÌBÄÿÄÓ\Ä\ÄBÄLÄBÄ˛,ÜUsed to save a transaction on a given directory.BÄÙ\Ä\ÄBÄaBÄ˜ÏÅOther FeaturesBÄª\ÄÄΩ\ÄÄ*lÇTransaction Name:ÄBÄ¿BÄÜBÄ¡\ÄBÄ˛¨ÑName of the transaction to be saved.BÄƒ\ÄÄ*,ÇDirectory Name:ÄBÄ¿BÄüBÄ¡\ÄBÄ˛lÑName of the directory to write to.BÄƒ\ÄÄ*lÅPathname:ÄBÄ¿BÄñBÄ¡\ÄBÄ˛,
-The name of the file into which the transaction forms will be stored. It defaults to <transaction>.lispÄBÄƒBÄ*ÏÑGive parameters for SAVE TRANSACTION:ÄBÄ˘BÄ“\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄ€ÄÏBÄÿÄÌBÄÿÄÓBÄ‹Ä˛BÄﬁÄÙBÄﬂÄªBÄ‚Ä˘BÄ“ÄÃÄ\ÄBÄ^BÄ‡√ÇDEFINE-IMPLEMENTATIONÄÄÎÄ	ÜÄ@»FÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄˆ\ÄBÄm√ÅIMPLEMENTATIONBÄ°BÄ:\ÄBÄßBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛¨ÆDefine a new implementation.
-
-   IMPLEMENTATION-NAME - Name of the implementation to be defined. All the implementation-specific
-                         accessor functions are expected to be defined.
-   DOCUMENTATION       - Description of this implementation.  (DEFINE-IMPLEMENTATION IMPLEMENTATION-NAME &REST KEYWORD-LIST &KEY &OPTIONAL DOCUMENTATION &ALLOW-OTHER-KEYS)ÄBÄõëBÄ‹¿lÄ~S¿BÄ˜¿BÄ°¿BÄ≠“BÄﬂ“BÄ˜íPA¡Pˇ€PPÅQPÇQí@√ö	öAëÅQ@Q
-îOÄBÄˆÄ1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄ˜\ÄBÄ8\ÄBÄÍÏÇDefine ImplementationÄBÄÏBÄ
-BÄÌBÄ
-BÄÓ\Ä\ÄBÄêBÄÕBÄ˛lÑUsed to define an implementation.ÄBÄÙ\Ä\ÄBÄaBÄ˜lÅDefinitionBÄª\ÄBÄΩ\ÄÄ*¨ÇImplementation Name:BÄ¿BÄ:BÄ¡\ÄBÄ˛ÏåName of the implementation. Implementation-dependent routines are expected to be defined by the user.ÄBÄƒ\ÄÄ*ÏÅDocumentation:BÄ¿BÄ¥BÄ¡\ÄBÄ˛ÏÑDocumentation for the implementation.ÄBÄ-BÄ*lÖGive parameters for DEFINE IMPLEMENTATION:BÄ˘BÄ\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄBÄÏBÄ
-BÄÌBÄ
-BÄÓBÄBÄ˛BÄBÄÙBÄBÄªBÄBÄ˘BÄBÄÃÄ\ÄBÄ^BÄ‡ÉÅDEFINE-INDEXÄÎÄ)ÜÄA»FÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ$\ÄBÄmBÄ∏CÅINDEX-NAME√ÅKEY-ATTRIBUTESCÇSTORAGE-STRUCTUREÄÅPRIORITYBÄ°BÄ:\ÄBÄßBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛ÏøñDefine an index on a relation in the active database.
-
-    RELATION-NAME - Name of the relation on which the index will be defined.
-    NAME - Name of the index to be defined
-    KEY - List of attributes names which form the key of the index.
-    STORAGE-STRUCTURE - The name of a RTMS defined storage structure upon which will be used as the index structure.
-    PRIORITY - A numerical value which determines the order in which RTMS will search multiple indices of a relation
-               for a possible key. The number one receives the highest consideration, if it fails the next index in
-               value is attempted.
-    DOCUMENTATION - A string describing this index.  (DEFINE-INDEX RELATION-NAME &REST KEYWORD-LIST &KEY &OPTIONAL NAME DOCUMENTATION STORAGE-STRUCTURE KEY PRIORITY &ALLOW-OTHER-KEYS)ÄÄBÄõëBÄ‹¿lÄ~S¿BÄ%¿ÉÄNAME¿BÄ¢¿BÄ¨¿BÄ1¿BÄ°¿BÄ≠“BÄﬂ“BÄ%íPA¡Pˇ€PPÅQPÇQPÉQ	PÑQ
-PÖQPÜQ
-J∫@√ööAëÅQ@QîOÄ8BÄ$Ä1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄ%\ÄBÄ8\ÄBÄÍ¨ÅDefine IndexBÄÏBÄ<BÄÌBÄ<BÄÓ\Ä\ÄBÄê•Ä@IBÄ˛,ÜUsed to define a secondary index on a relation.ÄBÄÙ\Ä\ÄBÄaBÄ˜lÅDefinitionBÄª\Ä	BÄΩ\ÄÄ*ÏÅRelation Name:BÄ¿BÄ:BÄ¡\ÄBÄ˛láName of the relation upon which the index will be defined.BÄƒ\ÄÄ*¨ÅIndex Name:ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛,ÑName of the index to be defined.BÄ-\ÄÄ*,ÇKey Attributes:ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛láList of attribute names which form the key for this index.BÄƒ\ÄÄ*lÇStorage Structure:BÄ¿¨ÄAVLÄBÄ¡\ÄBÄ˛,ÜThe storage structure used to define the index.ÄBÄ-\ÄÄ*lÅPriority:ÄBÄ¿FÄ
-BÄ¡\ÄBÄ˛ÏãA numerical value which indicates the priority given to this index. 1 is the highest priority.BÄë\ÄÄ*ÏÅDocumentation:BÄ¿BÄ¥BÄ¡\ÄBÄ˛¨ÉDocumentation for the index.BÄ-BÄ*lÑGive parameters for DEFINE INDEX:ÄBÄ˘BÄ5\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄ?BÄÏBÄ<BÄÌBÄ<BÄÓBÄ@BÄ˛BÄCBÄÙBÄDBÄªBÄGBÄ˘BÄ5BÄÃÄ\ÄBÄ^BÄ‡ÉÅMODIFY-INDEXÄÎÄ+ÜÄBFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄi\ÄBÄmBÄ∏BÄ.√ÅNEW-INDEX-NAMEBÄ/BÄ0BÄ1BÄ°BÄ:\ÄBÄßBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛ÏøΩModify an index on a relation in the active database.
-
-    RELATION-NAME - Name of the relation on which the index to be modified is defined
-    INDEX-NAME - Name of the index to be modified
-    NEW-NAME - New name for the specified index
-    KEY - List of attributes names which form the key of the index.
-    STORAGE-STRUCTURE - The name of a RTMS defined storage structure upon which will be used as the index structure.
-    PRIORITY - A numerical value which determines the order in which RTMS will search multiple indices of a relation
-               for a possible key. The number one receives the highest consideration, if it fails the next index in
-               value is attempted.
-    DOCUMENTATION - A string describing this index.  (MODIFY-INDEX RELATION-NAME INDEX-NAME &REST KEYWORD-LIST &KEY &OPTIONAL NEW-NAME DOCUMENTATION STORAGE-STRUCTURE KEY PRIORITY &ALLOW-OTHER-KEYS)ÄBÄõëBÄ‹¿lÄ~S¿BÄj¿ÅNEW-NAME¿BÄ¢¿BÄ¨¿BÄ1¿BÄ°¿BÄ≠“BÄﬂ“BÄjíPA¡Pˇ€PPÅQÇQPÉQPÑQ	PÖQ
-PÜQPáQ
-J∫@√¢öAëÅQÇQ@QúOÄzBÄiÄ1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄj\ÄBÄ8\ÄBÄÍ¨ÅModify IndexBÄÏBÄ~BÄÌBÄ~BÄÓ\Ä\ÄBÄBÄBBÄ˛,ÜUsed to define a secondary index on a relation.ÄBÄÙ\Ä\ÄBÄaBÄ˜¨ÅManipulationBÄª\Ä
-BÄΩ\ÄÄ*ÏÅRelation Name:BÄ¿BÄ:BÄ¡\ÄBÄ˛¨àName of the relation upon which the index to be modified is defined.BÄƒ\ÄÄ*¨ÅIndex Name:ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛lÑName of the index to be modified.ÄBÄ-\ÄÄ*,ÇNew Index Name:ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛ÏÇNew name of the index.BÄ-\ÄÄ*,ÇKey Attributes:ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛láList of attribute names which form the key for this index.BÄƒ\ÄÄ*lÇStorage Structure:BÄ¿BÄ:BÄ¡\ÄBÄ˛,ÜThe storage structure used to define the index.ÄBÄ-\ÄÄ*lÅPriority:ÄBÄ¿FÄ
-BÄ¡\ÄBÄ˛ÏãA numerical value which indicates the priority given to this index. 1 is the highest priority.BÄë\ÄÄ*ÏÅDocumentation:BÄ¿BÄ¥BÄ¡\ÄBÄ˛¨ÉDocumentation for the index.BÄ-BÄ*lÑGive parameters for DEFINE INDEX:ÄBÄ˘BÄw\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄÅBÄÏBÄ~BÄÌBÄ~BÄÓBÄÇBÄ˛BÄÑBÄÙBÄÖBÄªBÄàBÄ˘BÄwBÄÃÄ\ÄBÄ^BÄ‡ÉDEFINE-STORAGE-STRUCTUREÄÎÄ	ÜÄ@»FÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ≠\ÄBÄmBÄ0BÄ°BÄ:\ÄBÄßBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛,≤Define a new storage structure.
-
-   STORAGE-STRUCTURE-NAME - Name of the storage-structure to be defined. All the storage-structure-specific
-                            accessor functions are expected to be defined.
-   DOCUMENTATION          - Description of this storage-structure.  (DEFINE-STORAGE-STRUCTURE STORAGE-STRUCTURE-NAME &REST KEYWORD-LIST &KEY &OPTIONAL DOCUMENTATION &ALLOW-OTHER-KEYS)ÄÄBÄõëBÄ‹¿lÄ~S¿BÄÆ¿BÄ°¿BÄ≠“BÄﬂ“BÄÆíPA¡Pˇ€PPÅQPÇQí@√ö	öAëÅQ@Q
-îOÄºBÄ≠Ä1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄÆ\ÄBÄ8\ÄBÄÍ,ÉDefine Storage StructureBÄÏBÄ¿BÄÌBÄ¿BÄÓ\Ä\ÄBÄêBÄLÄ˛lÑUsed to define a storagestructure.BÄÙ\Ä\ÄBÄaBÄ˜lÅDefinitionBÄª\ÄBÄΩ\ÄÄ*,ÉStorage structure name:ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛¨
-Name of the storage structure. Storage-structure-dependent routines are expected to be defined by the user.ÄBÄƒ\ÄÄ*ÏÅDocumentation:BÄ¿BÄ:BÄ¡\ÄBÄ˛,ÖDocumentation for the storage structure.BÄ-BÄ*ÏÖGive parameters for DEFINE STORAGE STRUCTURE:ÄBÄ˘BÄ∫\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄ√BÄÏBÄ¿BÄÌBÄ¿BÄÓBÄƒBÄ˛BÄ∆BÄÙBÄ«BÄªBÄ BÄ˘BÄ∫BÄÃÄ\ÄBÄ^BÄ‡√ÅDEFINE-DOMAINÄÄÎÄ#ÜÄAHFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ⁄\ÄBÄm√ÄDOMAINp¿BÄu¨ÄDEFÄBÄ°BÄﬂBÄ:\ÄBÄßBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛¨ØDefine new domain. Corresponding predicate is expected to be defined prior to this operation.
-
-   DOMAIN-NAME     - Name of the domain to be defined.
-   DOCUMENTATION   - Describes the new domain.
-   FORMAT          - Print width for attributes belonging to this domain.  (DEFINE-DOMAIN DOMAIN-NAME &REST KEYWORD-LIST &KEY &OPTIONAL DEFAULT DOCUMENTATION FORMAT &ALLOW-OTHER-KEYS)ÄBÄõëBÄ‹¿lÄ~S¿BÄ€¿ÅDEFAULTÄ¿BÄ°¿BÄﬂ¿BÄ≠“BÄﬂ“BÄ€íPA¡Pˇ€PPÅQPÇQPÉQ	PÑQ
-≤@√
-ööAëÅQ@QîOÄÌBÄ⁄Ä1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄ€\ÄBÄ8\ÄBÄÍÏÅDefine DomainÄBÄÏBÄÒBÄÌBÄÒBÄÓ\Ä•Ä`DBÄ˛,ÉUsed to define a domain.BÄÙ\Ä\ÄBÄaBÄ˜lÅDefinitionBÄª\ÄBÄΩ\ÄÄ*¨ÅDomain Name:BÄ¿BÄ:BÄ¡\ÄBÄ˛Ï Name of the domain. Domain predicate is expected to be defined prior to this.ÄBÄƒ\ÄÄ*ÏÅDefault value:BÄ¿BÄ:BÄ¡\ÄBÄ˛ÏÉDefault value for this domain.BÄƒ\ÄÄ*ÏÅDocumentation:BÄ¿BÄ:BÄ¡\ÄBÄ˛ÏÉDocumentation for the domain.ÄBÄ-\ÄÄ*,ÇDefault width :ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛ÏÖThe default width to be used for this domain.ÄBÄƒBÄ*lÑGive parameters for DEFINE DOMAIN:BÄ˘BÄÍ\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄÙBÄÏBÄÒBÄÌBÄÒBÄÓBÄıBÄ˛BÄ˜BÄÙBÄ¯BÄªBÄ˚BÄ˘BÄÍBÄÃÄ\ÄBÄ^BÄ‡√ÅMODIFY-DOMAINÄÄÎÄ#ÜÄAHFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ\ÄBÄmBÄ‰BÄÊBÄ°BÄﬂBÄ:\ÄBÄßBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛l∞Modify the default format, value, and documentation of a domain.
-
-   DOMAIN-NAME - Name of the domain to be modified.
-   FORMAT      - New format, i.e the print width, for this domain.
-   DEFAULT     - New default value for this domain.
-   DOC         - New description of this domain.  (MODIFY-DOMAIN DOMAIN-NAME &REST KEYWORD-LIST &KEY &OPTIONAL FORMAT DEFAULT DOC &ALLOW-OTHER-KEYS)ÄÄBÄõëBÄ‹¿lÄ~S¿BÄ¿BÄÏ¿BÄ°¿BÄﬂ¿BÄ≠“BÄﬂ“BÄíPA¡Pˇ€PPÅQPÇQPÉQ	PÑQ
-≤@√
-ööAëÅQ@QîOÄ"BÄÄ1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄ\ÄBÄ8\ÄBÄÍÏÅModify DomainÄBÄÏBÄ&BÄÌBÄ&BÄÓ\Ä\ÄBÄBÄêBÄ˛,ÉUsed to modify a domain.BÄÙ\Ä\ÄBÄaBÄ˜¨ÅManipulationBÄª\ÄBÄΩ\ÄÄ*¨ÅDomain Name:BÄ¿BÄ:BÄ¡\ÄBÄ˛lÑName of the domain to be modified.BÄƒ\ÄÄ*ÏÅDefault value:BÄ¿BÄ:BÄ¡\ÄBÄ˛lÑNew default value for this domain.BÄƒ\ÄÄ*ÏÅDocumentation:BÄ¿BÄ:BÄ¡\ÄBÄ˛lÑNew documentation for the domain.ÄBÄ-\ÄÄ*,ÇDefault width :ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛lÜThe new default width to be used for this domain.ÄBÄƒBÄ*lÑGive parameters for MODIFY DOMAIN:BÄ˘BÄ \ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄ)BÄÏBÄ&BÄÌBÄ&BÄÓBÄ*BÄ˛BÄ,BÄÙBÄ-BÄªBÄ0BÄ˘BÄ BÄÃÄ\ÄBÄ^BÄ‡CÇDEFINE-TRANSACTIONÄÎÄ"ÜÄAHFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄH\ÄBÄmBÄŒ√ÄFORMSÄBÄ†BÄûBÄ:\ÄBÄßBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛ÏØDefine a transaction, a list of database calls.
-
-   TRANSACTION - Name of the transaction.
-   FORMS       - List of RTMS calls.
-   DIRECTORY   - Name of the directory in which this transaction will be stored.
-   PATHNAME    - Name of the file in which it will be stored.  (DEFINE-TRANSACTION TRANSACTION FORMS &REST KEYWORD-LIST &KEY &OPTIONAL DIRECTORY PATHNAME &ALLOW-OTHER-KEYS)ÄÄBÄõëBÄ‹¿lÄ~S¿BÄI¿BÄ†¿BÄû¿BÄ≠“BÄﬂ“BÄIíPA¡Pˇ€PPÅQÇQPÉQPÑQ	¢@√	¢
-öAëÅQÇQ@QúOÄXBÄHÄ1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄI\ÄBÄ8\ÄBÄÍlÇDefine TransactionBÄÏBÄ\BÄÌBÄ\BÄÓ\Ä\ÄBÄêBÄBÄ˛ÏÉUsed to define a transaction.ÄBÄÙ\Ä\ÄBÄaBÄ˜lÅDefinitionBÄª\ÄBÄΩ\ÄÄ*lÇTransaction Name:ÄBÄ¿BÄÜBÄ¡\ÄBÄ˛,ÉName of the transaction.BÄƒ\ÄÄ*,ÇDatabase calls:ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛lÉA list of database calls.ÄBÄƒBÄ—\ÄÄ*lÅPathname :BÄ¿BÄñBÄ¡\ÄBÄ˛¨ÖThe default file in which it will be saved.ÄBÄƒBÄ*,ÖGive parameters for DEFINE TRANSACTION:ÄBÄ˘BÄV\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄ_BÄÏBÄ\BÄÌBÄ\BÄÓBÄ`BÄ˛BÄbBÄÙBÄcBÄªBÄfBÄ˘BÄVBÄÃÄ\ÄBÄ^BÄ‡CÇMODIFY-TRANSACTIONÄÎÄ
- ÜÄAFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄz\ÄBÄmBÄŒÄ†BÄûBÄ:\ÄBÄßBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛¨®Edit the database calls in a transaction.
-   TRANSACTION - Name of the transaction.
-   DIRECTORY   - Name of the directory in which this transaction can be found.
-   PATHNAME    - Name of the file in which it is stored.  (MODIFY-TRANSACTION TRANSACTION &REST KEYWORD-LIST &KEY &OPTIONAL DIRECTORY PATHNAME &ALLOW-OTHER-KEYS)ÄBÄõëBÄ‹¿lÄ~S¿BÄ{¿BÄ†¿BÄû¿BÄ≠“BÄﬂ“BÄ{íPA¡Pˇ€PPÅQPÇQPÉQ	¢@√	ö
-öAëÅQ@QîOÄ BÄzÄ1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄ{\ÄBÄ8\ÄBÄÍlÇModify TransactionBÄÏBÄ
-BÄÌBÄ
-BÄÓ\Ä\ÄBÄBÄBÄ˛ÏÉUsed to modify a transaction.ÄBÄÙ\Ä\ÄBÄaBÄ˜¨ÅManipulationBÄª\ÄÄΩ\ÄÄ*lÇTransaction Name:ÄBÄ¿BÄÜBÄ¡\ÄBÄ˛,ÖName of the transaction to be modified.ÄBÄƒ\ÄÄ*lÅDirectory:BÄ¿BÄüBÄ¡\ÄBÄ˛ÏáDefault directory in which it can be found, if not in memory.ÄBÄƒ\ÄÄ*lÅPathname :BÄ¿BÄñBÄ¡\ÄBÄ˛¨áThe default file in which it can be found, if not in memory.BÄƒBÄ*,ÖGive parameters for MODIFY TRANSACTION:ÄBÄ˘BÄá\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄêBÄÏBÄ
-BÄÌBÄ
-BÄÓBÄëBÄ˛BÄìBÄÙBÄîBÄªBÄóBÄ˘BÄáBÄÃÄ\ÄBÄ^BÄ‡ÇDEFINE-DATABASEÄÄÎÄ#ÜÄAHFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ´\ÄBÄmBÄ°BÄ∑BÄ°ÉÄENVÄBÄ:\ÄBÄßBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛¨∞Define a new database.
-
-   DB-NAME     - Name of the database.
-   DIRECTORY   - Name of the directory in which this database is to be saved.
-   ENVIRONMENT - Name of the environment to be associated with this database.
-   DOCUMENTATION - A string describing this database.  (DEFINE-DATABASE DB-NAME &REST KEYWORD-LIST &KEY &OPTIONAL DIRECTORY ENVIRONMENT DOCUMENTATION &ALLOW-OTHER-KEYS)ÄÄBÄõëBÄ‹¿lÄ~S¿√ÄDEFDBÄ¿BÄ†¿BÄ°¿BÄÂ¿BÄ≠“BÄﬂ“BÄªíPA¡Pˇ€PPÅQPÇQPÉQ	PÑQ
-≤@√
-ööAëÅQ@QîOÄºBÄ´Ä1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄ¨\ÄBÄ8\ÄBÄÍ,ÇDefine DatabaseÄBÄÏBÄ¿BÄÌBÄ¿BÄÓ\Ä\ÄBÄêBÄêBÄ˛,ÜUsed to define a database in a given directory.ÄBÄÙ\Ä\ÄBÄaBÄ˜lÅDefinitionBÄª\ÄBÄΩ\ÄÄ*ÏÅDatabase Name:BÄ¿BÄ:BÄ¡\ÄBÄ˛ÏÇName of the database.ÄBÄƒ\ÄÄ*,ÇDirectory Name:ÄBÄ¿BÄüBÄ¡\ÄBÄ˛ÏÖName of the save directory for this database.ÄBÄƒ\ÄÄ*ÏÅDocumentation:BÄ¿BÄ¥BÄ¡\ÄBÄ˛,ÑDocumentation for the database.ÄBÄ-\ÄÄ*¨ÅEnvironment:BÄ¿BÄ:BÄ¡\ÄBÄ˛¨àName of the environment to be used to replace the default settings.ÄBÄƒBÄ*¨ÑGive parameters for DEFINE DATABASE:BÄ˘BÄπ\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄ√BÄÏBÄ¿BÄÌBÄ¿BÄÓBÄƒBÄ˛BÄ∆BÄÙBÄ«BÄªBÄ BÄ˘BÄπBÄÃÄ\ÄBÄ^BÄ‡ÇMODIFY-DATABASEÄÄÎÄ#ÜÄAHFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ‚\ÄBÄmBÄ°ÉÅNEW-DATABASEBÄ∑BÄ°BÄ:\ÄBÄßBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛,±Modify various features of the active database.
-
-  DATABASE      - Name of the database to be modified.
-  DATABASE-NAME - New name for this database.
-  DIRECTORY     - New directory in which this database is to be saved.
-  DOCUMENTATION - New description for this database.  (MODIFY-DATABASE DATABASE &REST KEYWORD-LIST &KEY &OPTIONAL DATABASE-NAME DIRECTORY DOCUMENTATION &ALLOW-OTHER-KEYS)ÄÄBÄõëBÄ‹¿lÄ~S¿BÄ„¿√ÅDATABASE-NAMEÄ¿BÄ†¿BÄ°¿BÄ≠“BÄﬂ“BÄ„íPA¡Pˇ€PPÅQPÇQPÉQ	PÑQ
-≤@√
-ööAëÅQ@QîOÄÛBÄ‚Ä1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄ„\ÄBÄ8\ÄBÄÍ,ÇModify DatabaseÄBÄÏBÄ˜BÄÌBÄ˜BÄÓ\Ä\ÄBÄBÄfBÄ˛,ÖUsed to modify the features a database.ÄBÄÙ\Ä\ÄBÄaBÄ˜¨ÅManipulationBÄª\ÄBÄΩ\ÄÄ*ÏÅDatabase Name:BÄ¿BÄ:BÄ¡\ÄBÄ˛ÏÇName of the database.ÄBÄƒ\ÄÄ*lÇNew Database Name:BÄ¿BÄ:BÄ¡\ÄBÄ˛ÏÜIf the database is to be renamed specify the new name.BÄƒ\ÄÄ*,ÇDirectory Name:ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛, To change the save directory for this database specify a new directory.ÄBÄƒ\ÄÄ*ÏÅDocumentation:BÄ¿BÄ:BÄ¡\ÄBÄ˛¨ÑNew documentation for the database.ÄBÄ-BÄ*¨ÑGive parameters for MODIFY DATABASE:BÄ˘BÄ\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄ˙BÄÏBÄ˜BÄÌBÄ˜BÄÓBÄ˚BÄ˛BÄ˝BÄÙBÄ˛BÄªBÄ	BÄ˘BÄBÄÃÄ\ÄBÄ^BÄ‡ÇMODIFY-ATTRIBUTEÄÎÄ(ÜÄA»FÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ	\ÄBÄmBÄ†BÄ√ÅNEW-ATTRBÄÊBÄ°BÄﬂBÄ:\ÄBÄßBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛ÏøModify various features of an attribute in a given relation.
-
-  RELATION       - Name of the relation in which the attribute to be modified exists.
-  ATTRIBUTE      - Name of the attribute to be modified.
-  ATTRIBUTE-NAME - New name for this attribute.
-  DEFAULT-VALUE  - New default value for this attribute.
-  DOCUMENTATION  - New description.
-  FORMAT         - New print width to be used for this attribute.  (MODIFY-ATTRIBUTE RELATION ATTRIBUTE &REST KEYWORD-LIST &KEY &OPTIONAL ATTRIBUTE-NAME DEFAULT-VALUE DOCUMENTATION FORMAT &ALLOW-OTHER-KEYS)ÄBÄõëBÄ‹¿lÄ~S¿BÄ	¿√ÅATTRIBUTE-NAME¿BÄÊ¿BÄ°¿BÄﬂ¿BÄ≠“BÄﬂ“BÄ	íPA¡Pˇ€PPÅQÇQPÉQPÑQ	PÖQ
-PÜQJ∫@√¢öAëÅQÇQ@QúOÄ*	BÄ	Ä1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄ	\ÄBÄ8\ÄBÄÍ,ÇModify AttributeBÄÏBÄ.	BÄÌBÄ.	BÄÓ\Ä\ÄBÄBÄÚBÄ˛,ÖUsed to modify the features a attribute.BÄÙ\Ä\ÄBÄaBÄ˜¨ÅManipulationBÄª\Ä	BÄΩ\ÄÄ*ÏÅRelation Name:BÄ¿BÄ~BÄ¡\ÄBÄ˛ÏÇName of the relation.ÄBÄƒ\ÄÄ*,ÇAttribute Name:ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛ÏÇName of the attribute.BÄƒ\ÄÄ*¨ÇNew Attribute Name:ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛,áIf the attribute is to be renamed specify the new name.ÄBÄƒ\ÄÄ*ÏÅDefault Value:BÄ¿BÄ:BÄ¡\ÄBÄ˛làTo change the default value of this attribute specify a new value.BÄƒ\ÄÄ*ÏÅDocumentation:BÄ¿BÄ:BÄ¡\ÄBÄ˛¨ÑNew documentation for the attribute.BÄ-\ÄÄ*,ÇDefault width :ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛¨ÜThe new default width to be used for this attribute.BÄƒBÄ*ÏÑGive parameters for MODIFY ATTRIBUTE:ÄBÄ˘BÄ'	\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄ1	BÄÏBÄ.	BÄÌBÄ.	BÄÓBÄ2	BÄ˛BÄ4	BÄÙBÄ5	BÄªBÄ8	BÄ˘BÄ'	BÄÃÄ\ÄBÄ^BÄ‡ÉÅMODIFY-VIEWÄÄÎÄ
- ÜÄAFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄX	\ÄBÄmÉÄVIEWBÄÊBÄ°BÄ:\ÄBÄßBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛¨•Modify a view definition or its documentation.
-
-   VIEW-NAME       - Name of the view.
-   VIEW-DEFINITION - New definition of the view.
-   VIEW-DOCUMENTATION - New description of the view.  (MODIFY-VIEW VIEW-NAME &REST KEYWORD-LIST &KEY &OPTIONAL VIEW-DEFINITION VIEW-DOCUMENTATION &ALLOW-OTHER-KEYS)ÄBÄõëBÄ‹¿lÄ~S¿BÄY	¿ÅVIEW-DEF¿ÅVIEW-DOC¿BÄ≠“BÄﬂ“BÄY	íPA¡Pˇ€PPÅQPÇQPÉQ	¢@√	ö
-öAëÅQ@QîOÄj	BÄX	Ä1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄY	\ÄBÄ8\ÄBÄÍ¨ÅModify ViewÄBÄÏBÄn	BÄÌBÄn	BÄÓ\Ä\ÄBÄ•Ä VBÄ˛¨ÑUsed to modify the features a view.ÄBÄÙ\Ä\ÄBÄaBÄ˜¨ÅManipulationBÄª\ÄÄΩ\ÄÄ*lÅView Name:BÄ¿BÄ:BÄ¡\ÄBÄ˛lÇName of the view.ÄBÄƒ\ÄÄ*,ÇView Definition:BÄ¿BÄ:BÄ¡\ÄBÄ˛¨ÉNew definition of the view.ÄBÄƒ\ÄÄ*ÏÅDocumentation:BÄ¿BÄ:BÄ¡\ÄBÄ˛,ÑNew documentation for the view.ÄBÄ-BÄ*,ÑGive parameters for MODIFY VIEW:BÄ˘BÄf	\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄq	BÄÏBÄn	BÄÌBÄn	BÄÓBÄr	BÄ˛BÄu	BÄÙBÄv	BÄªBÄy	BÄ˘BÄf	BÄÃÄ\ÄBÄ^BÄ‡ÇMODIFY-RELATIONÄÄÎÄ8ÜÄCFÄ&¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ
-	\ÄBÄmÉÄRELÄÅNEW-RELÄÅADD-ATTÄÅDEL-ATTÄÅREN-ATTÄBÄ£BÄ¨BÄﬂBÄ¢BÄ†BÄ°BÄ:\ÄBÄßBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛ÏøÙModify various features of a relation.
-
-  RELATION             - Name of the relation to be modified.
-  RELATION-NAME        - New name for this relation.
-  ADD-ATTRIBUTES       - List of new attributes and their description.
-  DELETE-ATTRIBUTES    - List of attributes to be destroyed.
-  RENAME-ATTRIBUTES    - List of list of OLD-NEW attribute names.
-  IMPLEMENTATION-TYPE  - Name of the new implementation type.
-  STORAGE-STRUCTURE    - Name of the new storage-structure.
-  FORMAT               - List of new print-width values to be used for the attributes.
-  KEY                  - List of attributes to form the new key for this relation.
-  DOCUMENTATION        - New description of this relation.
-  DIRECTORY            - New directory in which this relation is to be saved.  (MODIFY-RELATION RELATION &REST KEYWORD-LIST &KEY &OPTIONAL RELATION-NAME ADD-ATTRIBUTES DELETE-ATTRIBUTES RENAME-ATTRIBUTES IMPLEMENTATION-TYPE STORAGE-STRUCTURE FORMAT KEY DOCUMENTATION DIRECTORY &ALLOW-OTHER-KEYS)ÄÄBÄõëBÄ‹¿lÄ~S¿BÄé	¿BÄ†¿√ÅADD-ATTRIBUTES¿CÇDELETE-ATTRIBUTESÄ¿CÇRENAME-ATTRIBUTESÄ¿BÄ£¿BÄ¨¿BÄﬂ¿BÄ¢¿BÄ°¿BÄ†¿BÄ≠“BÄﬂ“BÄé	íPA¡Pˇ€PPÅQPÇQPÉQ	PÑQ
-PÖQPÜQPáQPàQP QPãQPäQJ∫@√ööAëÅQ@QîOÄ§	BÄ
-	Ä1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄé	\ÄBÄ8\ÄBÄÍ,ÇModify RelationÄBÄÏBÄ®	BÄÌBÄ®	BÄÓ\Ä\ÄBÄBÄBÄ˛,ÖUsed to modify the features a relation.ÄBÄÙ\Ä\ÄBÄaBÄ˜¨ÅManipulationBÄª\ÄBÄΩ\ÄÄ*ÏÅRelation Name:BÄ¿BÄ~BÄ¡\ÄBÄ˛ÏÇName of the Relation.ÄBÄƒ\ÄÄ*lÇNew Relation Name:BÄ¿BÄ:BÄ¡\ÄBÄ˛ÏÜIf the relation is to be renamed specify the new name.BÄƒ\ÄÄ*,ÇAdd attributes:ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛lãSpecify a list of attribute-descriptor pairs for attributes to be added to this relation.ÄBÄƒ\ÄÄ*lÇDelete attributes:BÄ¿BÄ:BÄ¡\ÄBÄ˛ÏàSpecify a list of attributes in this relation which are to be deleted.BÄƒ\ÄÄ*lÇRename attributes:BÄ¿BÄ:BÄ¡\ÄBÄ˛¨ãTo rename some of the attributes provide a list of the form (<old-attribute new-attribute>).BÄƒ\ÄÄ*¨ÇImplementation Type:BÄ¿BÄ:BÄ¡\ÄBÄ˛, To change the implementation type of this relation specify a new value.ÄBÄƒ\ÄÄ*lÇStorage structure:BÄ¿BÄ:BÄ¡\ÄBÄ˛ÏàTo change the storage structure of this relation specify a new value.ÄBÄƒ\ÄÄ*,ÅFormat:ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛,äTo change the format for this relation specify a new format as a list of values.BÄƒ\ÄÄ*¨ÄKey:BÄ¿BÄ:BÄ¡\ÄBÄ˛Ï To change the key for this relation specify a new key as a list of attributes.BÄƒ\ÄÄ*,ÇDirectory Name:ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛, To change the save directory for this relation specify a new directory.ÄBÄƒ\ÄÄ*ÏÅDocumentation:BÄ¿BÄ:BÄ¡\ÄBÄ˛¨ÑNew documentation for the relation.ÄBÄ-BÄ*¨ÑGive parameters for MODIFY RELATION:BÄ˘BÄü	\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄ´	BÄÏBÄ®	BÄÌBÄ®	BÄÓBÄ¨	BÄ˛BÄÆ	BÄÙBÄØ	BÄªBÄ≤	BÄ˘BÄü	BÄÃÄ\ÄBÄ^BÄ‡CÇDEFINE-ENVIRONMENTÄÎÄRÜÄCHFÄ4¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄÊ	\ÄBÄmBÄÂBÄòÄ†ÉÄERRÄCÅPAR-CHECKÄÅREL-IMPÄÅREL-STOÄ√ÄSTATUSÅSYS-IMPÄÅSYS-STOÄCÅVAL-CHECKÄ™ÄWARNBÄ:\ÄBÄßBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛Ïø∂Global variables defining an environment can be set using this function.
-
-   ENVIRONMENT  - Name of the environment.
-   AUTO-SAVE    - If T, RTMS saves the database whenever a relation is modified.
-   DIRECTORY    - Name of the default directory in which the database is to be saved.
-   ERRORS       - If T, error messages are generated.
-   PARAMETER-CHECKING - If T, extensive parameter validity checking is done.
-   RELATION-IMPLEMENTATION - The default implementation type for the user relations.
-   RELATION-STORAGE-STRUCTURE -The default storage structure type for the user relations.
-   STATUS       - If T, status messages are generated.
-   SYSTEM-IMPLEMENTATION - If there is no active database, this value will be used as the implementation
-                           type for implementing system-relations.
-   SYSTEM-STORAGE-STRUCTURE - If there is no active database, this value will be used as the storage structure
-                              for implementing system-relations.
-   VALIDITY     - If T, extensive validity checking is done for user-supplied data.
-   WARNINGS     - If T, warning messages are generated.  (DEFINE-ENVIRONMENT ENVIRONMENT &REST KEYWORD-LIST &KEY &OPTIONAL AUTO-SAVE DIRECTORY ERRORS PARAMETER-CHECKING RELATION-IMPLEMENTATION RELATION-STORAGE-STRUCTURE STATUS SYSTEM-IMPLEMENTATION SYSTEM-STORAGE-STRUCTURE VALIDITY WARNINGS &ALLOW-OTHER-KEYS)ÄBÄõ—BÄõëBÄ‹¿lÄ~S¿√ÄDEFENV¿CÅAUTO-SAVEÄ¿ÉÄPARA¿BÄ†¿BÄÚ	¿BÄÛ	¿√ÄERRORS¿BÄÙ	¿ÅVALIDITY¿ÅWARNINGS¿BÄı	¿BÄˆ	¿BÄ≠“BÄﬂ“BÄ˛	íPA¡Pˇ€PPÅQ‰PÇQ	PÖQ
-PÉQPÜQPáQPÑQPàQPãQPåQJ¸PÇQ	PÖQ
-PÉQPÜQPáQPÑQPàQP QPäQPãQPåQJ∫@√ööAëÅQ@QîOÄ
-BÄÊ	Ä1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄÁ	\ÄBÄ8\ÄBÄÍlÇDefine EnvironmentBÄÏBÄ
-BÄÌBÄ
-BÄÓ\Ä\ÄBÄêBÄeBÄ˛¨ÜUsed to define an environment in a given directory.ÄBÄÙ\Ä\ÄBÄaBÄ˜lÅDefinitionBÄª\ÄBÄΩ\ÄÄ*lÇEnvironment Name:ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛,ÉName of the environment.BÄƒ\ÄÄ*lÅAuto save:BÄ¿BÄ:BÄ¡\ÄBÄ˛¨àAutomatically saves all the modified relations after each function.ÄBÄ¶BÄ—\ÄÄ*,ÅErrors:ÄBÄ¿BÄÃBÄ¡\ÄBÄ˛¨ÖControls the printing of the error messages.BÄ¶\ÄÄ*¨ÇParameter Checking:ÄBÄ¿BÄÃBÄ¡\ÄBÄ˛,ÖControls the checking of the parameters.BÄ¶\ÄÄ*,ÉRelation Implementation:BÄ¿BÄΩBÄ¡\ÄBÄ˛ÏÖDefault implementation of the user relations.ÄBÄƒ\ÄÄ*¨ÉRelation storage structure:ÄBÄ¿BÄ¬BÄ¡\ÄBÄ˛lÜDefault storage structure for the user relations.ÄBÄƒ\ÄÄ*,ÅStatus:ÄBÄ¿BÄÃBÄ¡\ÄBÄ˛ÏÖControls the printing of the status messages.ÄBÄ¶\ÄÄ*ÏÇSystem Implementation:BÄ¿BÄ:BÄ¡\ÄBÄ˛ÏãDefault implementation of the system relations. Can not change this when a database is active.BÄƒ\ÄÄ*lÉSystem storage structure:ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛låDefault storage structure for the system relations. Can not change this when a database is active.BÄƒ\ÄÄ*lÇValidity Checking:BÄ¿BÄÃBÄ¡\ÄBÄ˛¨äControls the checking of the values during insertion and modification for validity.ÄBÄ¶\ÄÄ*lÅWarnings:ÄBÄ¿BÄÃBÄ¡\ÄBÄ˛ÏÖControls the printing of the warning messages.BÄ¶BÄ*,ÖGive parameters for DEFINE ENVIRONMENT:ÄBÄ˘BÄ¸	\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄ
-BÄÏBÄ
-BÄÌBÄ
-BÄÓBÄ
-BÄ˛BÄ
-BÄÙBÄ
-BÄªBÄ
-BÄ˘BÄ¸	BÄÃÄ\ÄBÄ^BÄ‡ÇDEFINE-RELATIONÄÄÎÄ.ÜÄBHFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄF
-\Ä	BÄmBÄ†ÅATTR-DESBÄüBÄ†BÄ°BÄ¢BÄ£BÄ§BÄ:\ÄBÄßBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛ÏøäDefine relations in the active database.
-
-   RELATION-NAME - Name of the relation to be defined.
-   ATTRIBUTE-DESCRIPTOR - List of attributes and their descriptions.
-   DIRECTORY     - Name of the directory in which this relation is to be saved.
-   DOCUMENTATION - Description of this relation.
-   FORMAT        - List of print-width values correponding to the attribute-list.
-   IMPLEMENTATION-TYPE - Name of the implementation for this relation.
-   KEY           - List of attributes comprising the key for this relation.
-   STORAGE-STRUCTURE   - Name of the storage structure to be used for this relation.  (DEFINE-RELATION RELATION-NAME ATTRIBUTE-DESCRIPTOR &REST KEYWORD-LIST &KEY &OPTIONAL DIRECTORY DOCUMENTATION FORMAT IMPLEMENTATION-TYPE KEY STORAGE-STRUCTURE &ALLOW-OTHER-KEYS)ÄÄBÄõëBÄ‹¿lÄ~S¿√ÄDEFREL¿ÉÅTUPLE-FORMAT¿BÄ†¿BÄ°¿BÄ¢¿BÄ£¿BÄ¨¿BÄ≠“BÄﬂ“BÄV
-íPA¡Pˇ€PPÅQÇQPÉQPÑQ	PÖQ
-PÜQPáQPàQJ∫@√¢öAëÅQÇQ@QúOÄX
-BÄF
-Ä1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄG
-\ÄBÄ8\ÄBÄÍ,ÇDefine RelationÄBÄÏBÄ\
-BÄÌBÄ\
-BÄÓ\Ä\ÄBÄêBÄBÄ˛lÉused to define a relation.BÄÙ\Ä\ÄBÄaBÄ˜lÅDefinitionBÄª\ÄBÄΩ\ÄÄ*ÏÅRelation Name:BÄ¿BÄ:BÄ¡\ÄBÄ˛¨ÑName of the relation to be defined.ÄBÄƒBÄ≈BÄÕBÄ—BÄ’BÄ⁄BÄﬁBÄ‚BÄ*¨ÑGive parameters for DEFINE RELATION:BÄ˘BÄT
-\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄ_
-BÄÏBÄ\
-BÄÌBÄ\
-BÄÓBÄ`
-BÄ˛BÄb
-BÄÙBÄc
-BÄªBÄf
-BÄ˘BÄT
-BÄÃÄ\ÄBÄ^BÄ‡ÉÅDEFINE-VIEWÄÄÎÄ
-ÜÄA
-FÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄr
-\ÄBÄmÅVIEWNAMEÇVIEW-DEFINITIONÄBÄ°BÄ:BÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛lûDefine views on the relations.
-
-   VIEW-NAME - Name of the view.
-   VIEW-DEF  - Definition of the view.
-   DOCUMENTATION - Describes the view.  (DEFINE-VIEW VIEWNAME VIEW-DEF &REST KEYWORD-LIST &KEY &OPTIONAL DOCUMENTATION &ALLOW-OTHER-KEYS)ÄÄBÄõëBÄ‹¿lÄ~S¿ÅDEFVIEWÄ¿BÄ≠“BÄﬂ“BÄÇ
-íP@¡Pˇ€PPÅQÇQÉQ¢ö@ëÅQÇQÉQ	úOÄÉ
-BÄr
-Ä1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄs
-\ÄBÄ8\ÄBÄÍ¨ÅDefine ViewÄBÄÏBÄá
-BÄÌBÄá
-BÄÓ\Ä\ÄBÄêBÄt	BÄ˛ÏÇUsed to define a view.BÄÙ\Ä\ÄBÄaBÄ˜lÅDefinitionBÄª\ÄÄΩ\ÄÄ*lÅView Name:BÄ¿BÄ:BÄ¡\ÄBÄ˛¨ÉSpecify a name for the view.BÄƒ\ÄÄ*,ÇView Definition:BÄ¿BÄ«BÄ¡\ÄBÄ˛lÑSpecify a definition for the view.BÄƒ\ÄÄ*¨ÇView Documentation:ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛¨ÑSpecify documentation for the view.ÄBÄƒBÄ*,ÑGive parameters for DEFINE VIEW:BÄ˘BÄÄ
-\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄä
-BÄÏBÄá
-BÄÌBÄá
-BÄÓBÄã
-BÄ˛BÄ
-
-BÄÙBÄé
-BÄªBÄë
-BÄ˘BÄÄ
-BÄÃÄ\ÄBÄ^BÄ‡ÇDEFINE-ATTRIBUTEÄÎÄ
-ÜÄAFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ•
-\ÄBÄmBÄ∏BÄP
-BÄ¢BÄ:\ÄBÄßBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛Ï¥Add a new attribute to a relation.
-    All its tuples will get the default value of the attribute for the attribute value.
-
-   RELATION-NAME - Name of the relation.
-   ATTRIBUTE-DESCRIPTOR - List of attributes and their descriptions.
-   KEY           - If the key for this relation is to be changed, specify it.  (DEFINE-ATTRIBUTE RELATION-NAME ATTRIBUTE-DESCRIPTOR &REST KEYWORD-LIST &KEY &OPTIONAL KEY &ALLOW-OTHER-KEYS)ÄBÄõëBÄ‹¿lÄ~S¿BÄ¶
-¿BÄ¢¿BÄ≠“BÄﬂ“BÄ¶
-íPA¡Pˇ€PPÅQÇQPÉQí@√¢	öAëÅQÇQ@Q
-úOÄ¥
-BÄ•
-Ä1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄ¶
-\ÄBÄ8\ÄBÄÍ,ÇDefine AttributeBÄÏBÄ∏
-BÄÌBÄ∏
-BÄÓ\Ä\ÄBÄêBÄÚBÄ˛¨ÑUsed to add attributes to relations.BÄÙ\Ä\ÄBÄaBÄ˜lÅDefinitionBÄª\ÄÄΩ\ÄÄ*,ÇRelation name: ÄBÄ¿BÄ~BÄ¡\ÄBÄ˛làThe name of the relation to which new attributes are to be added.ÄBÄƒBÄ≈\ÄÄ*ÏÄKey: ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛,
-New key for the relation if it is to be different from the previous value. Specify a list of attributes.BÄƒBÄ*ÏÑGive parameters for DEFINE ATTRIBUTE:ÄBÄ˘BÄ≤
-\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄª
-BÄÏBÄ∏
-BÄÌBÄ∏
-BÄÓBÄº
-BÄ˛BÄæ
-BÄÙBÄø
-BÄªBÄ¬
-BÄ˘BÄ≤
-BÄÃÄ\ÄBÄ^BÄ‡√ÅMODIFY-TUPLESÄÄÎÄ#ÜÄAHFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ“
-\ÄBÄmBÄ†ÉÅWHERE-CLAUSEBÄ∫ÍÄVALUESBÄ:\ÄBÄßBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛l∑The values of the tuples in a relation can be modified using this function.
-
-   RELATION  - Name of the relation whose tuples are to be modified.
-   ATTRIBUTE - List of attributes which are to be modified.
-   VALUE     - Corresponding list of values to be used in modifying the above attributes.
-   WHERE     - Selection criterion to be used.  (MODIFY-TUPLES RELATION &REST KEYWORD-LIST &KEY &OPTIONAL ATTRIBUTE VALUE WHERE &ALLOW-OTHER-KEYS)ÄBÄõëBÄ‹¿lÄ~S¿√ÄMODIFY¿√ÄWHEREÄ¿BÄ√¿BÄ›
-¿BÄ≠“BÄﬂ“BÄ„
-íPA¡Pˇ€PPÅQPÇQPÉQ	PÑQ
-≤@√
-ööAëÅQ@QîOÄÂ
-BÄ“
-Ä1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄ”
-\ÄBÄ8\ÄBÄÍÏÅModify TuplesÄBÄÏBÄÈ
-BÄÌBÄÈ
-BÄÓ\Ä\ÄBÄ•Ä@MBÄ˛¨ÑUsed to modify tuples in a relation.BÄÙ\Ä\ÄBÄaBÄ˜¨ÅManipulationBÄª\ÄBÄΩ\ÄÄ*lÅRelation: BÄ¿BÄ~BÄ¡\ÄBÄ˛ÏÜSpecify the relation whose tuples are to be modified.ÄBÄƒ\ÄÄ*ÏÅWhere clause: BÄ¿BÄÀBÄ¡\ÄBÄ˛ÏÉProvide a selection criteria.ÄBÄƒ\ÄÄ*¨ÅAttributes: BÄ¿BÄéBÄ¡\ÄBÄ˛làSpecify a list of attributes in the above relation to be modified.BÄƒ\ÄÄ*,ÅValues: BÄ¿BÄ–BÄ¡\ÄBÄ˛ÏàSpecify a corresponding list of values to modify the above attributes.BÄƒBÄ*ÏÑGive parameters for MODIFY TUPLES ==>ÄBÄ˘BÄ·
-\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄÏ
-BÄÏBÄÈ
-BÄÌBÄÈ
-BÄÓBÄÌ
-BÄ˛BÄ
-BÄÙBÄÒ
-BÄªBÄÙ
-BÄ˘BÄ·
-BÄÃÄ\ÄBÄ^BÄ‡√ÅDELETE-TUPLESÄÄÎÄ	ÜÄ@ƒFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ\ÄBÄmBÄ†BÄ‹
-BÄ:BÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛Ï£Deletes the tuples which satisfy the WHERE clause from the specified relation.
-
-   RELATION - Name of the relation from which the tuples are to be deleted.
-   WHERE    - Selection criterion to be used.  (DELETE-TUPLES RELATION &REST KEYWORD-LIST &KEY &OPTIONAL WHERE &ALLOW-OTHER-KEYS)ÄÄBÄõëBÄ‹¿lÄ~S¿BÄ¿BÄ‰
-¿BÄ≠“BÄﬂ“BÄíP@¡Pˇ€PPÅQPÇQíö	ö@ëÅQPÇQí
-îOÄBÄÄ1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄ\ÄBÄ8\ÄBÄÍÏÅDelete TuplesÄBÄÏBÄBÄÌBÄBÄÓ\ÄBÄfBÄ˛¨ÑUsed to delete tuples in a relation.BÄÙ\Ä\ÄBÄaBÄ˜¨ÅManipulationBÄª\ÄBÄΩ\ÄÄ*lÅRelation: BÄ¿BÄ~BÄ¡\ÄBÄ˛lÜSpecify a relation whose tuples are to be deleted.BÄƒ\ÄÄ*ÏÅWhere clause: BÄ¿BÄ:BÄ¡\ÄBÄ˛,ÜDeletes the tuples which satisfy this condition.BÄƒBÄ*ÏÑGive parameters for DELETE TUPLES ==>ÄBÄ˘BÄ\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄ!BÄÏBÄBÄÌBÄBÄÓBÄ"BÄ˛BÄ#BÄÙBÄ$BÄªBÄ'BÄ˘BÄBÄÃÄ\ÄBÄ^BÄ‡ÇRETRIEVE-TUPLESÄÄÎÄ]ÜÄ‡FÄ>¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ7\ÄBÄmBÄ†BÄ∫BÄ‹
-BÄNBÄ†BÄ°BÄ¢BÄ£BÄ¨BÄOBÄPBÄQBÄﬂBÄRBÄSBÄTBÄ¬BÄUBÄVBÄWBÄ.BÄ:\ÄBÄßBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛ÏøORetrieve some tuples from a relation satisying a where clause.
-
-   RELATION-NAME        - Name of the relation whose tuples are to be retrieved.
-   WHERE                - Criterion to be used in selecting the tuples.
-   PROJECT              - List of attributes to be projected in the result.
-   INTO                 - If the result is to be inserted in a relation, specify the name of that relation.
-                          If the above relation is not defined, RTMS defines it with the following keywords.
-   DIRECTORY            - Save directory for this relation.
-   DOCUMENTATION        - Documentation for this relation.
-   FORMAT               - List of print widths for the attributes in this relation.
-   IMPLEMENTATION-TYPE  - Name of the implementation type to be used.
-   INDEX-NAME           - Name of the index to use in the retrieval.
-   KEY                  - List of the resultant attributes to form the key for this relation.
-   STORAGE-STRUCTURE    - Name of the storage-structure.
-   WIDE                 - If T, result is printed out in Attribute: value format rather than as a table.
-   NUMBER               - If WIDE is T, this keyword specifies the number of attributes per line.
-   OUTPUT               - If the result is to be sent to a file, specify the file-name.
-   PRINT                - If NIL, the result is not printed.
-   QPRINT               - If T, the result is printed without formatting.
-   QUICK-SORT           - Specifies the attributes to sort the result on.
-   SORT                 - If any domain-specific, user-defined sort mechanism is to be used, this keyword
-                          can be used.
-   STREAM               - Specify the window to which the output is to be sent, if it is different than the
-                          the *standard-output* or RTMS-interface.
-   TUPLES               - If T, the resultant tuples are returned.
-   UNIQUE               - If T, only unique tuples are retrieved.   (RETRIEVE RELATION-NAME &REST KEYWORD-LIST &KEY &OPTIONAL DIRECTORY DOCUMENTATION FORMAT IMPLEMENTATION-TYPE INDEX-NAME INTO KEY NUMBER OUTPUT PRINT PROJECT QPRINT QUICK-SORT SORT STREAM STORAGE-STRUCTURE TUPLES UNIQUE WHERE WIDE &ALLOW-OTHER-KEYS)¿ÜÄÀÄBÄõëBÄ‹¿lÄ~S¿BÄ®¿ÅPROJECTÄ¿BÄ‰
-¿BÄN¿BÄ†¿BÄ°¿BÄ¢¿BÄ£¿BÄ¨¿BÄO¿BÄ^¿BÄQ¿BÄﬂ¿BÄR¿BÄ_¿BÄT¿BÄ¬¿BÄ`¿BÄV¿BÄW¿BÄ.¿BÄ≠“BÄﬂ“BÄ®íPA¡Pˇ€PPÅQPÇQ±‰ˇ€¸ÇQ	PÉQ
-PÑQPÖQPÜQPáQPàQP QPä?BPãQPåQP
-QPéQPèQPêQPëQPíQPìQPîQPïQ(J∫@√ööAëÅQ@QîOÄHBÄ7Ä1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄ8\ÄBÄ8\ÄBÄÍ,ÇRetrieve TuplesÄBÄÏBÄLBÄÌBÄLBÄÓ\Ä•Ä@RBÄ˛ÏÑUsed to Retrieve tuples in a relation.BÄÙ\Ä\ÄBÄaBÄ˜lÅOperatorsÄBÄª\ÄBÄΩBÄq\ÄÄ*¨ÅAttributes: BÄ¿BÄ:BÄ¡\ÄBÄ˛ÏáProvide a list of attributes. If not all attributes all used.ÄBÄƒBÄ˘
-BÄuBÄ—BÄyBÄ⁄BÄﬁBÄ‚BÄ}BÄÅBÄÖBÄÕBÄ BÄ
-BÄíBÄñBÄöBÄûBÄ¢\ÄÄ*¨ÅIndex-name:ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛làIf the data is to come from an index instead of the base relation.BÄƒBÄ*,ÖGive parameters for RETRIEVE TUPLES ==>ÄBÄ˘BÄD\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄOBÄÏBÄLBÄÌBÄLBÄÓBÄPBÄ˛BÄRBÄÙBÄSBÄªBÄVBÄ˘BÄDBÄÃÄ\ÄBÄ^BÄ‡p¿BÄuÏÄSELECTÄÎÄ ZÜÄ‡ FÄ=¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄf\ÄBÄmBÄ†BÄ‹
-BÄNBÄ†BÄ°BÄ¢BÄ£BÄ¨BÄOBÄPBÄQBÄﬂBÄRBÄSBÄTBÄ¬BÄUBÄVBÄWBÄ.BÄ:\ÄBÄßBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛Ïø˝Same as Retrieve except that all attributes are retrieved.
-
-   RELATION-NAME        - Name of the relation whose tuples are to be retrieved.
-   WHERE                - Criterion to be used in selecting the tuples.
-   INTO                 - If the result is to be inserted in a relation, specify the name of that relation.
-                          If the above relation is not defined, RTMS defines it with the following keywords.
-   DIRECTORY            - Save directory for this relation.
-   DOCUMENTATION        - Documentation for this relation.
-   FORMAT               - List of print widths for the attributes in this relation.
-   IMPLEMENTATION-TYPE  - Name of the implementation type to be used.
-   KEY                  - List of the resultant attributes to form the key for this relation.
-   STORAGE-STRUCTURE    - Name of the storage-structure.
-   WIDE                 - If T, result is printed out in Attribute: value format rather than as a table.
-   NUMBER               - If WIDE is T, this keyword specifies the number of attributes per line.
-   OUTPUT               - If the result is to be sent to a file, specify the file-name.
-   PRINT                - If NIL, the result is not printed.
-   QPRINT               - If T, the result is printed without formatting.
-   QUICK-SORT           - Specifies the attributes to sort the result on.
-   SORT                 - If any domain-specific, user-defined sort mechanism is to be used, this keyword
-                          can be used.
-   STREAM               - Specify the window to which the output is to be sent, if it is different than the
-                          the *standard-output* or RTMS-interface.
-   TUPLES               - If T, the resultant tuples are returned.
-   UNIQUE               - If T, only unique tuples are retrieved.  (SELECT-TUPLES RELATION-NAME &REST KEYWORD-LIST &KEY &OPTIONAL DIRECTORY DOCUMENTATION FORMAT IMPLEMENTATION-TYPE INTO KEY NUMBER OUTPUT PRINT QPRINT QUICK-SORT SORT STREAM STORAGE-STRUCTURE TUPLES UNIQUE WHERE WIDE &ALLOW-OTHER-KEYS)¿ÜÄÇ™ÄBÄõëBÄ‹¿lÄ~S¿√ÅSELECT-TUPLESÄ¿BÄ‰
-¿BÄN¿BÄ†¿BÄ°¿BÄ¢¿BÄ£¿BÄ¨¿BÄO¿BÄ^¿BÄQ¿BÄﬂ¿BÄR¿BÄ_¿BÄT¿BÄ¬¿BÄ`¿BÄV¿BÄW¿BÄ.¿BÄ≠“BÄﬂ“BÄG¿BÄ“BÄ®íPA¡Pˇ€PPÅQPÇQ	PÉQ
-PÑQPÖQPÜQPáQPàQP ?BPäQPãQPåQP
-QPéQPèQPêQPëQPíQPìQPîQ&J∫@√ööAëÅQPˇ€@QöîOÄxBÄfÄ1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄh\ÄBÄ8\ÄBÄÍÏÄSelectBÄÏBÄ|BÄÌBÄ|BÄÓ\Ä\ÄBÄBÄLÄ˛¨ÑUsed to Select tuples in a relation.BÄÙ\Ä\ÄBÄaBÄ˜lÅOperatorsÄBÄª\ÄBÄΩBÄqBÄ˘
-BÄuBÄ—BÄyBÄ⁄BÄﬁBÄ‚BÄ}BÄÅBÄÖBÄÕBÄ BÄ
-BÄíBÄñBÄöBÄûBÄ¢BÄ[BÄ*ÏÑGive parameters for SELECT TUPLES ==>ÄBÄ˘BÄt\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄBÄÏBÄ|BÄÌBÄ|BÄÓBÄÄBÄ˛BÄÇBÄÙBÄÉBÄªBÄÜBÄ˘BÄtBÄÃÄ\ÄBÄ^BÄ‡BÄGÄÎÄ\ÜÄ‡FÄ=¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄé\ÄBÄmBÄ†BÄ∫BÄNBÄ†BÄ°BÄ¢BÄ£BÄ¨BÄOBÄPBÄQBÄﬂBÄRBÄSBÄTBÄ¬BÄUBÄVBÄWBÄ:\ÄBÄßBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛Ïø#Same as Retrieve except that all tuples are retrieved.
-
-   RELATION-NAME        - Name of the relation whose tuples are to be retrieved.
-   PROJECT              - List of attributes to be projected in the result.
-   INTO                 - If the result is to be inserted in a relation, specify the name of that relation.
-                          If the above relation is not defined, RTMS defines it with the following keywords.
-   DIRECTORY            - Save directory for this relation.
-   DOCUMENTATION        - Documentation for this relation.
-   FORMAT               - List of print widths for the attributes in this relation.
-   IMPLEMENTATION-TYPE  - Name of the implementation type to be used.
-   INDEX-NAME           - Name of the index to use in the retrieval.
-   KEY                  - List of the resultant attributes to form the key for this relation.
-   STORAGE-STRUCTURE    - Name of the storage-structure.
-   WIDE                 - If T, result is printed out in Attribute: value format rather than as a table.
-   NUMBER               - If WIDE is T, this keyword specifies the number of attributes per line.
-   OUTPUT               - If the result is to be sent to a file, specify the file-name.
-   PRINT                - If NIL, the result is not printed.
-   QPRINT               - If T, the result is printed without formatting.
-   QUICK-SORT           - Specifies the attributes to sort the result on.
-   SORT                 - If any domain-specific, user-defined sort mechanism is to be used, this keyword
-                          can be used.
-   STREAM               - Specify the window to which the output is to be sent, if it is different than the
-                          the *standard-output* or RTMS-interface.
-   TUPLES               - If T, the resultant tuples are returned.
-   UNIQUE               - If T, only unique tuples are retrieved.  (PROJECT RELATION-NAME &REST KEYWORD-LIST &KEY &OPTIONAL DIRECTORY DOCUMENTATION FORMAT IMPLEMENTATION-TYPE INDEX-NAME INTO KEY NUMBER OUTPUT PRINT PROJECT QPRINT QUICK-SORT SORT STREAM STORAGE-STRUCTURE TUPLES UNIQUE WIDE &ALLOW-OTHER-KEYS)¿ÜÄäÄBÄõëBÄ‹¿lÄ~S¿BÄG¿BÄN¿BÄ†¿BÄ°¿BÄ¢¿BÄ£¿BÄ¨¿BÄO¿BÄ^¿BÄQ¿BÄﬂ¿BÄR¿BÄ_¿BÄT¿BÄ¬¿BÄ`¿BÄV¿BÄW¿BÄ≠“BÄﬂ“BÄ‰
-¿BÄ“BÄ®íPA¡Pˇ€PPÅQPÇQ±‰ˇ€¸ÇQPÉQ	PÑQ
-PÖQPÜQPáQPàQP ?BPäQPãQPåQP
-QPéQPèQPêQPëQPíQPìQ$J∫@√ööAëÅQPˇ›@QöîOÄùBÄéÄ1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄG\ÄBÄ8\ÄBÄÍ,ÅProjectÄBÄÏBÄ°BÄÌBÄ°BÄÓ\Ä\ÄBÄBÄkBÄ˛ÏÑUsed to Project tuples in a relation.ÄBÄÙ\Ä\ÄBÄaBÄ˜lÅOperatorsÄBÄª\ÄBÄΩBÄqBÄWBÄuBÄ—BÄyBÄ⁄BÄﬁBÄ‚BÄ}BÄÅBÄÖBÄÕBÄ BÄ
-BÄíBÄñBÄöBÄûBÄ¢BÄ*ÏÑGive parameters for PROJECT TUPLES ==>BÄ˘BÄö\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄ§BÄÏBÄ°BÄÌBÄ°BÄÓBÄ•BÄ˛BÄßBÄÙBÄ®BÄªBÄ´BÄ˘BÄöBÄÃÄ\ÄBÄ^BÄ‡CÇCOMMIT-TRANSACTIONÄÎÄ
- ÜÄAFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ≥\ÄBÄm√ÄTRANSÄBÄ†BÄûBÄ:\ÄBÄßBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛¨≠Execute the database calls in a transaction.
-
-   TRANSACTION - Name of the transaction to be commited.
-   DIRECTORY   - Name of the directory in which this transaction can be found, if not in memory.
-   PATHNAME    - Name of the file in which it can be found.  (COMMIT-TRANSACTION TRANSACTION &REST KEYWORD-LIST &KEY &OPTIONAL DIRECTORY PATHNAME &ALLOW-OTHER-KEYS)ÄBÄõëBÄ‹¿lÄ~S¿BÄ¥¿BÄ†¿BÄû¿BÄ≠“BÄﬂ“BÄ¥íPA¡Pˇ€PPÅQPÇQPÉQ	¢@√	ö
-öAëÅQ@QîOÄ√BÄ≥Ä1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄ¥\ÄBÄ8\ÄBÄÍlÇCommit TransactionBÄÏBÄ«BÄÌBÄ«BÄÓ\Ä\ÄBÄ•Ä CBÄ˛¨áCommit a transaction - execute all the database calls in it.BÄÙ\Ä\ÄBÄaBÄ˜lÅOperatorsÄBÄª\ÄÄΩ\ÄÄ*lÉName of the transaction :ÄBÄ¿BÄÜBÄ¡\ÄBÄ˛¨ÑThe name of an existing transaction.BÄƒ\ÄÄ*ÏÇName of the directory:BÄ¿BÄüBÄ¡\ÄBÄ˛¨åName of the directory which contains the transaction file, if the transaction is not in the memory.ÄBÄƒ\ÄÄ*lÅPathname:ÄBÄ¿BÄñBÄ¡\ÄBÄ˛ÏéIf the transaction is not in memory, provide the pathname for the transaction file. It defaults to <transaction>.lisp.BÄƒBÄ*ÏÑGive parameters for COMMIT TRANSACTIONBÄ˘BÄ¡\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄ BÄÏBÄ«BÄÌBÄ«BÄÓBÄÀBÄ˛BÄŒBÄÙBÄœBÄªBÄ“BÄ˘BÄ¡BÄÃÄ\ÄBÄ^BÄ‡ÉÄJOINÄÎÄDÜÄCàFÄ.¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄÊ\ÄBÄmBÄNÉÄFROMBÄGBÄ‰
-BÄ¬BÄﬂBÄ†BÄ°BÄ¢BÄ£BÄ¨BÄTBÄWBÄ:\ÄBÄßBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛Ïø3This function provides the capability to combine two relations into a new relation
-   in which the tuples which are to participate in the operation are selected
-   by a where clause.
-
-   FROM                 - A list consisting of the relations to be joined.
-   PROJECT              - This clause specifies the attributes that are to be in the resultant relation
-                          and their associated names in that new relation. It should be of the form
-                          (<[relation-name.]attribute-name>). The optional part relation-name can be
-                          skipped if the attribute is unique in one of the two relations being joined.
-                          If the keyword FROM is not specified, this clause should contain the names
-                          of the relations to be joined. Also, if * is given instead of the attribute-name
-                          it indicates that RTMS should use all the attributes in that relation.
-   WHERE                - Can be used to perform theta-joins. It is a condition used in joining the relations.
-   INTO                 - If the result is to be inserted in a relation, specify the name of that relation.
-                          If the above relation is not defined, RTMS defines it with the following keywords.
-   DIRECTORY            - Save directory for this relation.
-   DOCUMENTATION        - Documentation for this relation.
-   FORMAT               - List of print widths for the attributes in this relation.
-   IMPLEMENTATION-TYPE  - Name of the implementation type to be used.
-   KEY                  - List of the resultant attributes to form the key for this relation.
-   STORAGE-STRUCTURE    - Name of the storage-structure.
-   PRINT                - If NIL, the resultant relation will not be printed out.
-   TUPLES               - If T, the resultant tuples will be returned.
-   UNIQUE               - If T, only unique tuples will be part of the resultant relation.  (JOIN &REST KEYWORD-LIST &KEY FROM &KEY &OPTIONAL PROJECT WHERE INTO DIRECTORY DOCUMENTATION FORMAT IMPLEMENTATION-TYPE KEY STORAGE-STRUCTURE PRINT TUPLES UNIQUE &ALLOW-OTHER-KEYS)ÄÄBÄõëBÄ‹¿lÄ~S¿BÄÁ¿BÄ¿BÄG¿BÄN¿BÄ¬¿BÄﬂ¿BÄ†¿BÄ°¿BÄ¢¿BÄ£¿BÄ¨¿BÄT¿BÄ‰
-¿BÄW¿BÄ≠“BÄﬂ“BÄ“√ÅJOIN-INTERNALÄíPA¡Pˇ€PPPÇQPÉQ	PÅQ
-PÖQPÜQPáQPàQP QPäQPãQPåQPÑQP
-QJ∫@√¢öAëPÇQ@QöåOÄ˜BÄÊÄ1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄÁ\ÄBÄ8\ÄBÄÍ¨ÄJoinBÄÏBÄ˚BÄÌBÄ˚BÄÓ\Ä•Ä JBÄ˛,ÉUsed to join relations.ÄBÄÙ\Ä\ÄBÄaBÄ˜lÅOperatorsÄBÄª\ÄBÄΩ\ÄÄ*lÇOutput relation :ÄBÄ¿BÄ‘BÄ¡\ÄBÄ˛ÏéIf not provided, the result of JOIN is stored in a temporary relation unless only the resultant tuples are requested.ÄBÄƒ\ÄÄ*ÏÄFROM :BÄ¿BÄ‡BÄ¡\ÄBÄ˛ÏÖSpecify a list of two relations to be joined.ÄBÄƒ\ÄÄ*lÅProject :ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛,ñThis gives the attributes in the output relation. Example: (rel1.* a3 (rel2.a1 a4)) ==> All the attributes in rel1, attribute A3 of rel2 and atribute A1 of rel2 renamed as A4.ÄBÄƒ\ÄÄ*,ÅWhere :ÄBÄ¿BÄÿBÄ¡\ÄBÄ˛lèThe join clause using the theta-operators. It is a where clause consisting of attributes from the relations being joined.ÄBÄƒ\ÄÄ*,ÅTuples?ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛,ëSpecify if the resultant tuples be returned rather than inserted in a relation. The following parameters can be ignored if this is true.BÄ¶BÄÕBÄ—BÄyBÄ⁄BÄﬁBÄ‚BÄíBÄ¢BÄ*,ÉGive parameters for JOINBÄ˘BÄÙ\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄ˛BÄÏBÄ˚BÄÌBÄ˚BÄÓBÄˇBÄ˛BÄBÄÙBÄBÄªBÄBÄ˘BÄÙBÄÃÄ\ÄBÄ^BÄ‡ÇDESTROY-DATABASEÄÎÄ	ÜÄ@»FÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ!\ÄBÄmBÄ°BÄÅBÄ:\ÄBÄßBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛,ßDelete the specified database from memory and all the corresponding files from
-   disk if the keyword DISK is T.
-
-   DATABASE - Name of the database to be destroyed.
-   DISK     - If T, all the relevant files will be deleted.  (DESTROY-DATABASE DATABASE &REST KEYWORD-LIST &KEY &OPTIONAL DISK &ALLOW-OTHER-KEYS)ÄÄBÄõëBÄ‹¿lÄ~S¿BÄ"¿BÄÅ¿BÄ≠“BÄﬂ“BÄ"íPA¡Pˇ€PPÅQPÇQí@√ö	öAëÅQ@Q
-îOÄ0BÄ!Ä1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄ"\ÄBÄ8\ÄBÄÍ,ÇDestroy DatabaseBÄÏBÄ4BÄÌBÄ4BÄÓ\Ä\Ä•Ä KBÄêBÄ˛lÉUsed to destroy databasesÄBÄÙ\Ä\ÄBÄaBÄ˜¨ÅManipulationBÄª\ÄBÄΩ\ÄÄ*ÏÅDatabase Name:BÄ¿BÄ:BÄ¡\ÄBÄ˛ÏÑName of the database to be destroyed.ÄBÄƒ\ÄÄ*ÏÇDelete from the DISK:ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛Ï IF YES all the files pertaining to this database are deleted but NOT EXPUNGED.BÄ¶BÄ*ÏÑGive parameters for DESTROY DATABASE:ÄBÄ˘BÄ.\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄ7BÄÏBÄ4BÄÌBÄ4BÄÓBÄ8BÄ˛BÄ;BÄÙBÄ<BÄªBÄ?BÄ˘BÄ.BÄÃÄ\ÄBÄ^BÄ‡√ÅDESTROY-DOMAINÄÎÄ
-ÜÄ@
-ÑFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄO\ÄBÄmBÄ‰BÄ:BÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛ÏèDestroys the domain definition but keeps the domain predicate to handle previously defined data.  (DESTROY-DOMAIN DOMAIN-NAME)ÄBÄõëBÄ‹¿lÄ~S¿BÄP¿BÄ≠“BÄﬂ“BÄPíP@¡Pˇ€PPÅQíö@ëÅQ	åOÄ]BÄOÄ1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄP\ÄBÄ8\ÄBÄÍÏÅDestroy DomainBÄÏBÄaBÄÌBÄaBÄÓ\Ä•Ä`KBÄ˛,ÉUsed to destroy domains.BÄÙ\Ä\ÄBÄaBÄ˜¨ÅManipulationBÄª\ÄBÄΩ\ÄÄ*¨ÅDomain Name:BÄ¿BÄ:BÄ¡\ÄBÄ˛¨ÑName of the domain to be destroyed.ÄBÄƒBÄ*¨ÑGive parameters for DESTROY DOMAIN:ÄBÄ˘BÄ[\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄdBÄÏBÄaBÄÌBÄaBÄÓBÄeBÄ˛BÄgBÄÙBÄhBÄªBÄkBÄ˘BÄ[BÄÃÄ\ÄBÄ^BÄ‡√ÇDESTROY-IMPLEMENTATIONÄÎÄ
-ÜÄ@
-ÑFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄw\ÄBÄmBÄBÄ:BÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛,óDestroys implementation type definition but keeps the accessor functions to handle previously defined relations using this implementation.  (DESTROY-IMPLEMENTATION IMPLEMENTATION-NAME)ÄBÄõëBÄ‹¿lÄ~S¿BÄx¿BÄ≠“BÄﬂ“BÄxíP@¡Pˇ€PPÅQíö@ëÅQ	åOÄÖBÄwÄ1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄx\ÄBÄ8\ÄBÄÍÏÇDestroy ImplementationBÄÏBÄ BÄÌBÄ BÄÓ\Ä\ÄBÄ:BÄÕBÄ˛,ÑUsed to destroy implementations.BÄÙ\Ä\ÄBÄaBÄ˜¨ÅManipulationBÄª\ÄBÄΩ\ÄÄ*¨ÇImplementation Name:BÄ¿BÄ:BÄ¡\ÄBÄ˛¨ÖName of the implementation to be destroyed.ÄBÄƒBÄ*¨ÖGive parameters for DESTROY IMPLEMENTATION:ÄBÄ˘BÄÉ\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄåBÄÏBÄ BÄÌBÄ BÄÓBÄ
-BÄ˛BÄèBÄÙBÄêBÄªBÄìBÄ˘BÄÉBÄÃÄ\ÄBÄ^BÄ‡√ÅDESTROY-INDEXÄÄÎÄ
-ÜÄ@
-ƒFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄü\ÄBÄmBÄ∏BÄ.BÄ:BÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛,üDestroy the specified index which is defined on the specified relation.
-
-   RELATION-NAME - The name of the relation upon which the relation is defined.
-   INDEX-NAME - The name of the index to be deleted.  (DESTROY-INDEX RELATION-NAME INDEX-NAME)ÄÄBÄõëBÄ‹¿lÄ~S¿BÄ†¿BÄ≠“BÄﬂ“BÄ†íP@¡Pˇ€PPÅQÇQöö@ëÅQÇQ	îOÄ≠BÄüÄ1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄ†\ÄBÄ8\ÄBÄÍÏÅDestroy IndexÄBÄÏBÄ±BÄÌBÄ±BÄÓ\Ä\ÄBÄ:BÄBBÄ˛,ÉUsed to destroy indices.BÄÙ\Ä\ÄBÄaBÄ˜¨ÅManipulationBÄª\ÄBÄΩ\ÄÄ*ÏÅRelation Name:BÄ¿BÄ:BÄ¡\ÄBÄ˛¨àName of the relation on which the index to be destroyed is defined.ÄBÄƒ\ÄÄ*¨ÅIndex Name:ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛lÑName of the index to be destroyed.BÄƒBÄ*lÑGive parameters for DESTROY INDEX:BÄ˘BÄ´\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄ¥BÄÏBÄ±BÄÌBÄ±BÄÓBÄµBÄ˛BÄ∑BÄÙBÄ∏BÄªBÄªBÄ˘BÄ´BÄÃÄ\ÄBÄ^BÄ‡CÉDESTROY-STORAGE-STRUCTUREÄÄÎÄ
-ÜÄ@
-ÑFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄÀ\ÄBÄmBÄ0BÄ:BÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛,óDestroys storage structure definition but keeps the accessor functions to handle previously defined relations using this structure.  (DESTROY-STORAGE-STRUCTURE STORAGE-STRUCTURE-NAME)ÄÄBÄõëBÄ‹¿lÄ~S¿BÄÃ¿BÄ≠“BÄﬂ“BÄÃíP@¡Pˇ€PPÅQíö@ëÅQ	åOÄŸBÄÀÄ1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄÃ\ÄBÄ8\ÄBÄÍlÉDestroy Storage StructureÄBÄÏBÄ›BÄÌBÄ›BÄÓ\Ä\ÄBÄ:BÄLÄ˛¨ÑUsed to destroy storage structures.ÄBÄÙ\Ä\ÄBÄaBÄ˜¨ÅManipulationBÄª\ÄBÄΩ\ÄÄ*,ÉStorage structure name:ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛ÏÖName of the storage structure to be destroyed.BÄƒBÄ*ÏÖGive parameters for DESTROY STORAGE STRUCTURE:BÄ˘BÄ◊\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄ‡BÄÏBÄ›BÄÌBÄ›BÄÓBÄ·BÄ˛BÄ„BÄÙBÄ‰BÄªBÄÁBÄ˘BÄ◊BÄÃÄ\ÄBÄ^BÄ‡ÉÅDESTROY-VIEWÄÎÄ
-ÜÄ@
-ÑFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄÛ\ÄBÄmBÄb	BÄ:BÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛,áDestroys the view from memory.  (DESTROY-VIEW VIEW-NAME)ÄBÄõëBÄ‹¿lÄ~S¿BÄÙ¿BÄ≠“BÄﬂ“BÄÙíP@¡Pˇ€PPÅQíö@ëÅQ	åOÄBÄÛÄ1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄÙ\ÄBÄ8\ÄBÄÍ¨ÅDestroy ViewBÄÏBÄBÄÌBÄBÄÓ\Ä\ÄBÄ:BÄt	BÄ˛ÏÇUsed to destroy views.BÄÙ\Ä\ÄBÄaBÄ˜¨ÅManipulationBÄª\ÄBÄΩ\ÄÄ*lÅView name:BÄ¿BÄ:BÄ¡\ÄBÄ˛lÑName of the view to be destroyed.ÄBÄƒBÄ*lÑGive parameters for DESTROY VIEW:ÄBÄ˘BÄˇ\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄBÄÏBÄBÄÌBÄBÄÓBÄ	BÄ˛BÄBÄÙBÄBÄªBÄBÄ˘BÄˇBÄÃÄ\ÄBÄ^BÄ‡ÇDESTROY-RELATIONÄÎÄ	ÜÄ@»FÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ\ÄBÄmBÄ†BÄÅBÄ:\ÄBÄßBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛l¶Deletes the specified relation from the active database.
-   Deletes all the files on disk if keyword DISK is t.
-
-   RELATION - Name of the relation to be destroyed.
-   DISK     - If T, the relevant files will be deleted.  (DESTROY-RELATION RELATION &REST KEYWORD-LIST &KEY &OPTIONAL DISK &ALLOW-OTHER-KEYS)ÄBÄõëBÄ‹¿lÄ~S¿BÄ¿BÄÅ¿BÄ≠“BÄﬂ“BÄíPA¡Pˇ€PPÅQPÇQí@√ö	öAëÅQ@Q
-îOÄ*BÄÄ1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄ\ÄBÄ8\ÄBÄÍ,ÇDestroy RelationBÄÏBÄ.BÄÌBÄ.BÄÓ\Ä\ÄBÄ:BÄBÄ˛lÉUsed to destroy relationsÄBÄÙ\Ä\ÄBÄaBÄ˜¨ÅManipulationBÄª\ÄBÄΩ\ÄÄ*ÏÅRelation Name:BÄ¿BÄ:BÄ¡\ÄBÄ˛ÏÑName of the relation to be destroyed.ÄBÄƒ\ÄÄ*ÏÇDelete from the DISK:ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛¨ IF YES the file corresponding to this relation is deleted but NOT EXPUNGED.ÄBÄ¶BÄ*ÏÑGive parameters for DESTROY RELATION:ÄBÄ˘BÄ(\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄ1BÄÏBÄ.BÄÌBÄ.BÄÓBÄ2BÄ˛BÄ4BÄÙBÄ5BÄªBÄ8BÄ˘BÄ(BÄÃÄ\ÄBÄ^BÄ‡CÇDESTROY-ATTRIBUTEÄÄÎÄ
- ÜÄAFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄH\ÄBÄmBÄ†BÄ√BÄ¢BÄ:\ÄBÄßBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛,ØAttributes in a relation can be deleted using this function.
-
-   RELATION-NAME - Name of the relation from which the attributes are to be deleted.
-   ATTRIBUTE     - List of attributes to be destroyed.
-   KEY           - List of attributes to form the new key, if so desired.  (DESTROY-ATTRIBUTE RELATION-NAME &REST KEYWORD-LIST &KEY &OPTIONAL ATTRIBUTE KEY &ALLOW-OTHER-KEYS)ÄBÄõëBÄ‹¿lÄ~S¿BÄI¿BÄ√¿BÄ¢¿BÄ≠“BÄﬂ“BÄIíPA¡Pˇ€PPÅQPÇQPÉQ	¢@√	ö
-öAëÅQ@QîOÄWBÄHÄ1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄI\ÄBÄ8\ÄBÄÍlÇDestroy AttributeÄBÄÏBÄ[BÄÌBÄ[BÄÓ\Ä\ÄBÄ:BÄÚBÄ˛lÖUsed to destroy attributes from relationsÄBÄÙ\Ä\ÄBÄaBÄ˜¨ÅManipulationBÄª\ÄÄΩ\ÄÄ*ÏÅRelation Name:BÄ¿BÄ:BÄ¡\ÄBÄ˛,àName of the relation from which attributes are to be destroyed.ÄBÄƒ\ÄÄ*¨ÅAttributes:ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛ÏÉList of attributes to destroy.BÄƒ\ÄÄ*¨ÄKey:BÄ¿BÄ:BÄ¡\ÄBÄ˛,èNew key for the relation if it is to be different from the previous value or if any of the key attributes are destroyed.BÄƒBÄ*ÏÑGive parameters for DESTROY ATTRIBUTE:BÄ˘BÄU\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄ^BÄÏBÄ[BÄÌBÄ[BÄÓBÄ_BÄ˛BÄaBÄÙBÄbBÄªBÄeBÄ˘BÄUBÄÃÄ\ÄBÄ^BÄ‡ÍÄUNIONÄÄÎÄ9ÜÄCFÄ'¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄy\ÄBÄmBÄBÄNBÄ¬BÄﬂBÄ†BÄ°BÄ¢BÄ£BÄ¨BÄTBÄWBÄ:\ÄBÄßBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛ÏøsUnion of tuples in two relations.
-
-   FROM                 - This clause specifies the relations to participate in the UNION operation.
-                          In addition, RTMS allows users to specify the attributes in these relations to
-                          participate in the operation as well as a where-clause to specify the tuples.
-                          It should be of the format: (RelA [(PROJECT <attrA> WHERE where-clause-A)] RelB
-                          [(PROJECT <attrB> WHERE where-clause-B)]) where attrA indicates attributes in
-                          relation relA and where-clause-A indicates a where-clause involving the attributes
-                          in relation relA.
-   INTO                 - If the result is to be inserted in a relation, specify the name of that relation.
-                          If the above relation is not defined, RTMS defines it with the following keywords.
-   DIRECTORY            - Save directory for this relation.
-   DOCUMENTATION        - Documentation for this relation.
-   FORMAT               - List of print widths for the attributes in this relation.
-   IMPLEMENTATION-TYPE  - Name of the implementation type to be used.
-   KEY                  - List of the resultant attributes to form the key for this relation.
-   STORAGE-STRUCTURE    - Name of the storage-structure.
-   PRINT                - If NIL, the resultant relation will not be printed out.
-   TUPLES               - If T, the resultant tuples will be returned.
-   UNIQUE               - If T, only unique tuples will be part of the resultant relation.  (RELATION-UNION &REST KEYWORD-LIST &KEY &OPTIONAL FROM INTO DIRECTORY DOCUMENTATION FORMAT IMPLEMENTATION-TYPE STORAGE-STRUCTURE KEY PRINT TUPLES UNIQUE &ALLOW-OTHER-KEYS)ÄÄBÄõëBÄ‹¿lÄ~S¿√ÅRELATION-UNION¿BÄN¿BÄ¿BÄ¬¿BÄﬂ¿BÄ†¿BÄ°¿BÄ¢¿BÄ£¿BÄ¨¿BÄT¿BÄW¿BÄ≠“BÄﬂ“BÄàíPA¡Pˇ€PPPÇQPÅQ	PÉQ
-PÑQPÖQPÜQPáQPàQP QPäQPãQJ∫@√íöAë@QåOÄ BÄyÄ1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄz\ÄBÄ8\ÄBÄÍÏÄUnionÄBÄÏBÄ
-BÄÌBÄ
-BÄÓ\Ä\Ä•Ä O•Ä UBÄ˛ÏÖUsed to form union of two compatible relationsBÄÙ\Ä\ÄBÄaBÄ˜lÅOperatorsÄBÄª\ÄBÄΩ\ÄÄ*ÏÇList of two relations:BÄ¿BÄ:BÄ¡\ÄBÄ˛¨§List of the names of two relations which will take part in the relation union operation. The attributes to be projected and a where clause can be specified for each relation using keywords. For instance, (REL1 (PROJECT <attr> WHERE <where-claue>) REL2 (WHERE <where-clause> PROJECT <attr>)).ÄBÄƒBÄu\ÄÄ*,ÅTuples?ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛,ëSpecify if the resultant tuples be returned rather than inserted in a relation. The following parameters can be ignored if this is true.BÄ¶BÄÕBÄ—BÄyBÄ⁄BÄﬁBÄ‚BÄíBÄ¢BÄ*ÏÖParameters for the set-union of two relationsÄBÄ˘BÄÜ\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄêBÄÏBÄ
-BÄÌBÄ
-BÄÓBÄëBÄ˛BÄïBÄÙBÄñBÄªBÄôBÄ˘BÄÜBÄÃÄ\ÄBÄ^BÄ‡CÅDIFFERENCEÄÎÄ9ÜÄCFÄ'¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ©\ÄBÄmBÄBÄNBÄ¬BÄﬂBÄ†BÄ°BÄ¢BÄ£BÄ¨BÄTBÄWBÄ:\ÄBÄßBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛Ïø|Difference of the tuples in two relations.
-
-   FROM                 - This clause specifies the relations to participate in the DIFFERENCE operation.
-                          In addition, RTMS allows users to specify the attributes in these relations to
-                          participate in the operation as well as a where-clause to specify the tuples.
-                          It should be of the format: (RelA [(PROJECT <attrA> WHERE where-clause-A)] RelB
-                          [(PROJECT <attrB> WHERE where-clause-B)]) where attrA indicates attributes in
-                          relation relA and where-clause-A indicates a where-clause involving the attributes
-                          in relation relA.
-   INTO                 - If the result is to be inserted in a relation, specify the name of that relation.
-                          If the above relation is not defined, RTMS defines it with the following keywords.
-   DIRECTORY            - Save directory for this relation.
-   DOCUMENTATION        - Documentation for this relation.
-   FORMAT               - List of print widths for the attributes in this relation.
-   IMPLEMENTATION-TYPE  - Name of the implementation type to be used.
-   KEY                  - List of the resultant attributes to form the key for this relation.
-   STORAGE-STRUCTURE    - Name of the storage-structure.
-   PRINT                - If NIL, the resultant relation will not be printed out.
-   TUPLES               - If T, the resultant tuples will be returned.
-   UNIQUE               - If T, only unique tuples will be part of the resultant relation.  (RELATION-DIFFERENCE &REST KEYWORD-LIST &KEY &OPTIONAL FROM INTO DIRECTORY DOCUMENTATION FORMAT IMPLEMENTATION-TYPE STORAGE-STRUCTURE KEY PRINT TUPLES UNIQUE &ALLOW-OTHER-KEYS)ÄBÄõëBÄ‹¿lÄ~S¿ÉÇRELATION-DIFFERENCEÄ¿BÄN¿BÄ¿BÄ¬¿BÄﬂ¿BÄ†¿BÄ°¿BÄ¢¿BÄ£¿BÄ¨¿BÄT¿BÄW¿BÄ≠“BÄﬂ“BÄ∏íPA¡Pˇ€PPPÇQPÅQ	PÉQ
-PÑQPÖQPÜQPáQPàQP QPäQPãQJ∫@√íöAë@QåOÄπBÄ©Ä1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄ™\ÄBÄ8\ÄBÄÍlÅDifferenceBÄÏBÄΩBÄÌBÄΩBÄÓ\Ä\ÄBÄìBÄêBÄ˛¨ÜUsed to form difference of two compatible relationsÄBÄÙ\Ä\ÄBÄaBÄ˜lÅOperatorsÄBÄª\ÄBÄΩ\ÄÄ*ÏÇList of two relations:BÄ¿BÄ:BÄ¡\ÄBÄ˛,•List of the names of two relations which will take part in the relation difference operation. The attributes to be projected and a where clause can be specified for each relation using keywords. For instance, (REL1 (PROJECT <attr> WHERE <where-claue>) REL2 (WHERE <where-clause> PROJECT <attr>)).BÄƒBÄu\ÄÄ*,ÅTuples?ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛,ëSpecify if the resultant tuples be returned rather than inserted in a relation. The following parameters can be ignored if this is true.BÄ¶BÄÕBÄ—BÄyBÄ⁄BÄﬁBÄ‚BÄíBÄ¢BÄ*lÜParameters for the set-difference of two relationsBÄ˘BÄ∂\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄ¿BÄÏBÄΩBÄÌBÄΩBÄÓBÄ¡BÄ˛BÄ√BÄÙBÄƒBÄªBÄ«BÄ˘BÄ∂BÄÃÄ\ÄBÄ^BÄ‡™ÅINTERSECTIONÄÎÄ9ÜÄCFÄ'¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ◊\ÄBÄmBÄBÄNBÄ¬BÄﬂBÄ†BÄ°BÄ¢BÄ£BÄ¨BÄTBÄWBÄ:\ÄBÄßBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛Ïø}Intersection of tuples in two relations.
-
-   FROM                 - This clause specifies the relations to participate in the INTERSECTION operation.
-                          In addition, RTMS allows users to specify the attributes in these relations to
-                          participate in the operation as well as a where-clause to specify the tuples.
-                          It should be of the format: (RelA [(PROJECT <attrA> WHERE where-clause-A)] RelB
-                          [(PROJECT <attrB> WHERE where-clause-B)]) where attrA indicates attributes in
-                          relation relA and where-clause-A indicates a where-clause involving the attributes
-                          in relation relA.
-   INTO                 - If the result is to be inserted in a relation, specify the name of that relation.
-                          If the above relation is not defined, RTMS defines it with the following keywords.
-   DIRECTORY            - Save directory for this relation.
-   DOCUMENTATION        - Documentation for this relation.
-   FORMAT               - List of print widths for the attributes in this relation.
-   IMPLEMENTATION-TYPE  - Name of the implementation type to be used.
-   KEY                  - List of the resultant attributes to form the key for this relation.
-   STORAGE-STRUCTURE    - Name of the storage-structure.
-   PRINT                - If NIL, the resultant relation will not be printed out.
-   TUPLES               - If T, the resultant tuples will be returned.
-   UNIQUE               - If T, only unique tuples will be part of the resultant relation.  (RELATION-INTERSECTION &REST KEYWORD-LIST &KEY &OPTIONAL FROM INTO DIRECTORY DOCUMENTATION FORMAT IMPLEMENTATION-TYPE STORAGE-STRUCTURE KEY PRINT TUPLES UNIQUE &ALLOW-OTHER-KEYS)ÄBÄõëBÄ‹¿lÄ~S¿√ÇRELATION-INTERSECTIONÄ¿BÄN¿BÄ¿BÄ¬¿BÄﬂ¿BÄ†¿BÄ°¿BÄ¢¿BÄ£¿BÄ¨¿BÄT¿BÄW¿BÄ≠“BÄﬂ“BÄÊíPA¡Pˇ€PPPÇQPÅQ	PÉQ
-PÑQPÖQPÜQPáQPàQP QPäQPãQJ∫@√íöAë@QåOÄÁBÄ◊Ä1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄÿ\ÄBÄ8\ÄBÄÍ¨ÅIntersectionBÄÏBÄÎBÄÌBÄÎBÄÓ\Ä\ÄBÄìBÄÕBÄ˛ÏÜUsed to form intersection of two compatible relationsÄBÄÙ\Ä\ÄBÄaBÄ˜lÅOperatorsÄBÄª\ÄBÄΩ\ÄÄ*ÏÇList of two relations:BÄ¿BÄ:BÄ¡\ÄBÄ˛l•List of the names of two relations which will take part in the relation intersection operation. The attributes to be projected and a where clause can be specified for each relation using keywords. For instance, (REL1 (PROJECT <attr> WHERE <where-claue>) REL2 (WHERE <where-clause> PROJECT <attr>)).BÄƒBÄu\ÄÄ*,ÅTuples?ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛,ëSpecify if the resultant tuples be returned rather than inserted in a relation. The following parameters can be ignored if this is true.BÄ¶BÄÕBÄ—BÄyBÄ⁄BÄﬁBÄ‚BÄíBÄ¢BÄ*¨ÜParameters for the set-intersection of two relationsBÄ˘BÄ‰\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄÓBÄÏBÄÎBÄÌBÄÎBÄÓBÄÔBÄ˛BÄÒBÄÙBÄÚBÄªBÄıBÄ˘BÄ‰BÄÃÄ\ÄBÄ^BÄ‡ÅAVERAGEÄÄÎÄ(ÜÄA»FÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ\ÄBÄmBÄ†BÄüBÄWBÄ‰
-CÄBYBÄ¬BÄ:\ÄBÄßBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛ÏøIAverage of the values of a given attribute in a relation satisfying a where clause.
-
-   RELATION-NAME  - Name of the relation.
-   ATTRIBUTE-NAME - Name of the attribute whose average is to be found.
-   UNIQUE         - If T, only unique values will be used.
-   WHERE          - If a selection criterion is provided, only the satisfying values will be used.
-   BY             - Name of the attribute to group average of the above attribute by.
-   TUPLES         - If T, the resultant values will be returned rather than printed out as a table.  (AVERAGE RELATION-NAME ATTRIBUTE-NAME &REST KEYWORD-LIST &KEY &OPTIONAL UNIQUE WHERE BY TUPLES &ALLOW-OTHER-KEYS)ÄÄBÄõëBÄ‹¿lÄ~S¿BÄ¿BÄW¿BÄ‰
-¿BÄ¿BÄ¬¿BÄ≠“BÄﬂ“BÄíPA¡Pˇ€PPÅQÇQPÉQPÑQ	PÖQ
-PÜQJ∫@√¢öAëÅQÇQ@QúOÄBÄÄ1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄ\ÄBÄ8\ÄBÄÍ,ÅAverageÄBÄÏBÄBÄÌBÄBÄÓ\Ä\ÄBÄìBÄÚBÄ˛làUsed to compute the average of the attribute values in a relation.BÄÙ\Ä\ÄBÄaBÄ˜lÅOperatorsÄBÄª\Ä	BÄΩ\ÄÄ*ÏÅRelation name:BÄ¿BÄ~BÄ¡\ÄBÄ˛làName of the relation which contains the attribute to be averaged.ÄBÄƒ\ÄÄ*,ÇAttribute name:ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛¨ÖName of the attribute in the above relation.BÄƒ\ÄÄ*,ÅUnique?ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛läIf true, only the unique values of the attribute will be used in the calculations.BÄ¶BÄ˘
-\ÄÄ*lÄByBÄ¿BÄ:BÄ¡\ÄBÄ˛ÏàSpecify the attribute to be used in grouping the data into categories.BÄƒBÄñBÄ*,ÉParameters for average:ÄBÄ˘BÄ\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄBÄÏBÄBÄÌBÄBÄÓBÄBÄ˛BÄBÄÙBÄ BÄªBÄ#BÄ˘BÄBÄÃÄ\ÄBÄ^BÄ‡ÉÄSUMÄÄÎÄ(ÜÄA»FÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ;\ÄBÄmBÄ†BÄüBÄWBÄ‰
-BÄBÄ¬BÄ:\ÄBÄßBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛ÏøASum of the values of a given attribute in a relation satisfying a where clause.
-
-   RELATION-NAME  - Name of the relation.
-   ATTRIBUTE-NAME - Name of the attribute whose sum is to be found.
-   UNIQUE         - If T, only unique values will be used.
-   WHERE          - If a selection criterion is provided, only the satisfying values will be used.
-   BY             - Name of the attribute to group sum of the above attribute by.
-   TUPLES         - If T, the resultant values will be returned rather than printed out as a table.  (SUM RELATION-NAME ATTRIBUTE-NAME &REST KEYWORD-LIST &KEY &OPTIONAL UNIQUE WHERE BY TUPLES &ALLOW-OTHER-KEYS)ÄÄBÄõëBÄ‹¿lÄ~S¿BÄ<¿BÄW¿BÄ¿BÄ¬¿BÄ‰
-¿BÄ≠“BÄﬂ“BÄ<íPA¡Pˇ€PPÅQÇQPÉQPÖQ	PÜQ
-PÑQJ∫@√¢öAëÅQÇQ@QúOÄJBÄ;Ä1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄ<\ÄBÄ8\ÄBÄÍ¨ÄSumÄBÄÏBÄNBÄÌBÄNBÄÓ\Ä\ÄBÄìBÄLÄ˛ÏáUsed to compute the sum of the attribute values in a relation.BÄÙ\Ä\ÄBÄaBÄ˜lÅOperatorsÄBÄª\Ä	BÄΩ\ÄÄ*ÏÅRelation name:BÄ¿BÄ~BÄ¡\ÄBÄ˛,àName of the relation which contains the attribute to be summed.ÄBÄƒBÄ(BÄ,BÄ˘
-BÄ0BÄñBÄ*¨ÇParameters for sum:ÄBÄ˘BÄH\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄQBÄÏBÄNBÄÌBÄNBÄÓBÄRBÄ˛BÄTBÄÙBÄUBÄªBÄXBÄ˘BÄHBÄÃÄ\ÄBÄ^BÄ‡ÉÄSIZEÄÎÄ&ÜÄAàFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄd\ÄÄmBÄ†BÄWBÄ‰
-BÄBÄ¬BÄ:\ÄBÄßBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛¨ÆNumber of tuples in a relation satisfying a where clause.
-
-   RELATION-NAME  - Name of the relation whose size is to be found.
-   UNIQUE         - If T, only unique values will be used.
-   WHERE          - If a selection criterion is provided, only the satisfying tuples will be used.  (SIZE RELATION-NAME &REST KEYWORD-LIST &KEY &OPTIONAL UNIQUE WHERE &ALLOW-OTHER-KEYS)ÄÄBÄõëBÄ‹¿lÄ~S¿BÄe¿BÄW¿BÄ¿BÄ¬¿BÄ‰
-¿BÄ≠“BÄﬂ“BÄeíPA¡Pˇ€PPÅQPÇQPÑQ	PÖQ
-PÉQJ∫@√ööAëÅQ@QîOÄsBÄdÄ1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄe\ÄBÄ8\ÄBÄÍ¨ÄSizeBÄÏBÄwBÄÌBÄwBÄÓ\Ä•Ä`SBÄ˛lÖUsed to compute the size of the relation.ÄBÄÙ\Ä\ÄBÄaBÄ˜lÅOperatorsÄBÄª\ÄBÄΩ\ÄÄ*ÏÅRelation name:BÄ¿BÄ~BÄ¡\ÄBÄ˛¨ÖName of the relation whose size is required.BÄƒBÄ,BÄ˘
-BÄ0BÄñBÄ*¨ÇParameters for size:BÄ˘BÄq\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄzBÄÏBÄwBÄÌBÄwBÄÓBÄ{BÄ˛BÄ}BÄÙBÄ~BÄªBÄÅBÄ˘BÄqBÄÃÄ\ÄBÄ^BÄ‡ÍÄCOUNTÄÄÎÄ(ÜÄA»FÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ
-\ÄBÄmBÄ†BÄüBÄWBÄ‰
-BÄBÄ¬BÄ:\ÄBÄßBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛ÏøGNumber of the values of a given attribute in a relation satisfying a where clause.
-   RELATION-NAME  - Name of the relation.
-   ATTRIBUTE-NAME - Name of the attribute whose count is to be found.
-   UNIQUE         - If T, only unique values will be used.
-   WHERE          - If a selection criterion is provided, only the satisfying values will be used.
-   BY             - Name of the attribute to group count of the above attribute by.
-   TUPLES         - If T, the resultant values will be returned rather than printed out as a table.  (COUNT-RTMS RELATION-NAME ATTRIBUTE-NAME &REST KEYWORD-LIST &KEY &OPTIONAL UNIQUE WHERE BY TUPLES &ALLOW-OTHER-KEYS)ÄBÄõëBÄ‹¿lÄ~S¿CÅCOUNT-RTMS¿BÄW¿BÄ¿BÄ¬¿BÄ‰
-¿BÄ≠“BÄﬂ“BÄúíPA¡Pˇ€PPÅQÇQPÉQPÖQ	PÜQ
-PÑQJ∫@√¢öAëÅQÇQ@QúOÄùBÄ
-Ä1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄé\ÄBÄ8\ÄBÄÍÏÄCountÄBÄÏBÄ°BÄÌBÄ°BÄÓ\Ä\ÄBÄìBÄÕBÄ˛,àUsed to compute the count of the attribute values in a relation.BÄÙ\Ä\ÄBÄaBÄ˜lÅOperatorsÄBÄª\Ä	BÄΩ\ÄÄ*ÏÅRelation name:BÄ¿BÄ~BÄ¡\ÄBÄ˛lãName of the relation which contains the attribute to be used to find the number of tuples.BÄƒBÄ(BÄ,BÄ˘
-BÄ0BÄñBÄ*ÏÇParameters for count:ÄBÄ˘BÄö\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄ§BÄÏBÄ°BÄÌBÄ°BÄÓBÄ•BÄ˛BÄßBÄÙBÄ®BÄªBÄ´BÄ˘BÄöBÄÃÄ\ÄBÄ^BÄ‡ÅMAXIMUMÄÄÎÄ%ÜÄAàFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ∑\ÄÄmBÄ†BÄüBÄ‰
-BÄBÄ¬BÄ:\ÄBÄßBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛Ïø(Maximum of the values of a given attribute in a relation satisfying a where clause.
-
-   RELATION-NAME  - Name of the relation.
-   ATTRIBUTE-NAME - Name of the attribute whose maximum is to be found.
-   WHERE          - If a selection criterion is provided, only the satisfying values will be used.
-   BY             - Name of the attribute to group maximum of the above attribute by.
-   TUPLES         - If T, the resultant values will be returned rather than printed out as a table.  (MAXIMUM RELATION-NAME ATTRIBUTE-NAME &REST KEYWORD-LIST &KEY &OPTIONAL WHERE BY TUPLES &ALLOW-OTHER-KEYS)ÄÄBÄõëBÄ‹¿lÄ~S¿BÄ∏¿BÄ‰
-¿BÄ¿BÄ¬¿BÄ≠“BÄﬂ“BÄ∏íPA¡Pˇ€PPÅQÇQPÉQPÑQ	PÖQ
-≤@√
-¢öAëÅQÇQ@QúOÄ∆BÄ∑Ä1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄ∏\ÄBÄ8\ÄBÄÍ,ÅMaximumÄBÄÏBÄ BÄÌBÄ BÄÓ\Ä\ÄBÄìBÄBÄ˛làUsed to compute the maximum of the attribute values in a relation.BÄÙ\Ä\ÄBÄaBÄ˜lÅOperatorsÄBÄª\ÄBÄΩ\ÄÄ*ÏÅRelation name:BÄ¿BÄ~BÄ¡\ÄBÄ˛làName of the relation which contains the attribute to be maximumd.ÄBÄƒBÄ(BÄ˘
-BÄ0BÄñBÄ*,ÉParameters for maximum:ÄBÄ˘BÄƒ\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄÕBÄÏBÄ BÄÌBÄ BÄÓBÄŒBÄ˛BÄ–BÄÙBÄ—BÄªBÄ‘BÄ˘BÄƒBÄÃÄ\ÄBÄ^BÄ‡ÅMINIMUMÄÄÎÄ%ÜÄAàFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ‡\ÄÄmBÄ†BÄüBÄ‰
-BÄBÄ¬BÄ:\ÄBÄßBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛Ïø(Minimum of the values of a given attribute in a relation satisfying a where clause.
-
-   RELATION-NAME  - Name of the relation.
-   ATTRIBUTE-NAME - Name of the attribute whose minimum is to be found.
-   WHERE          - If a selection criterion is provided, only the satisfying values will be used.
-   BY             - Name of the attribute to group minimum of the above attribute by.
-   TUPLES         - If T, the resultant values will be returned rather than printed out as a table.  (MINIMUM RELATION-NAME ATTRIBUTE-NAME &REST KEYWORD-LIST &KEY &OPTIONAL WHERE BY TUPLES &ALLOW-OTHER-KEYS)ÄÄBÄõëBÄ‹¿lÄ~S¿BÄ·¿BÄ‰
-¿BÄ¿BÄ¬¿BÄ≠“BÄﬂ“BÄ·íPA¡Pˇ€PPÅQÇQPÉQPÑQ	PÖQ
-≤@√
-¢öAëÅQÇQ@QúOÄÔBÄ‡Ä1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄ·\ÄBÄ8\ÄBÄÍ,ÅMinimumÄBÄÏBÄÛBÄÌBÄÛBÄÓ\Ä•Ä`MBÄ˛làUsed to compute the minimum of the attribute values in a relation.BÄÙ\Ä\ÄBÄaBÄ˜lÅOperatorsÄBÄª\ÄBÄΩ\ÄÄ*ÏÅRelation name:BÄ¿BÄ~BÄ¡\ÄBÄ˛làName of the relation which contains the attribute to be minimumd.ÄBÄƒBÄ(BÄ˘
-BÄ0BÄñBÄ*,ÉParameters for minimum:ÄBÄ˘BÄÌ\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄˆBÄÏBÄÛBÄÌBÄÛBÄÓBÄ˜BÄ˛BÄ˘BÄÙBÄ˙BÄªBÄ˝BÄ˘BÄÌBÄÃÄ\ÄBÄ^BÄ‡ÉÇINSPECT-DBMS-OBJECTÄÄÎÄÜÄ@ÑFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ	\ÄBÄm√ÄOBJECTBÄ:BÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛lÑInformation on any database objectÄBÄõëBÄ‹¿lÉ(INSPECT-DBMS-OBJECT '~S)Ä¿BÄﬂ“BÄ¶íP@¡Pˇ€PÅQö@ëÅQåOÄBÄ	Ä1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄ
-\ÄBÄ8\ÄBÄÍ¨ÇInspect Dbms ObjectÄBÄÏBÄBÄÌBÄBÄÓ\Ä•ÄÜBÄ˛¨ÑUsed to inspect any database object.BÄÙBÄBÄª\ÄBÄΩ\ÄÄ*,ÇDatabase Object:BÄ¿BÄÒBÄ¡\ÄBÄ˛¨áSpecify a database object (COMMAND / RELATION / ATTRIBUTE).ÄBÄƒBÄ*ÏÉHelp on the database object ->BÄ˘BÄ\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄBÄÏBÄBÄÌBÄBÄÓBÄ BÄ˛BÄ"BÄÙBÄBÄªBÄ#BÄ˘BÄBÄÃÄ\ÄBÄ^BÄ‡ÉÇCLEAR-OUTPUT-WINDOWÄÄÎÄÜÄ@DFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ/\ÄBÄmBÄ:BÄ:\ÄÄí\Äp¿BÄMlÇSHEET-LINE-HEIGHTÄp¿BÄM,ÉSHEET-BOTTOM-MARGIN-SIZEp¿BÄMÏÇSHEET-TOP-MARGIN-SIZEÄp¿BÄM¨ÅSHEET-HEIGHTp¿BÄM¨ÇSHEET-INSIDE-HEIGHTÄp¿BÄM¨ÉSHEET-NUMBER-OF-INSIDE-LINESBÄïBÄoBÄ‡BÄ˛ÏÉClear the entire output windowÄBÄõëiÅSET-ITEMSÄ¿iÅSCROLL-TOÄ¿)ÅRELATIVEÄPˇ€êP@¡PJPéNPíNˇcPìNˇcPõNhCˇcP@ùOÄKBÄ/Ä1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄ0\ÄBÄ8\ÄBÄÍ¨ÇClear Output WindowÄBÄÏBÄOBÄÌBÄOBÄÓ\ÄeÄåBÄÙBÄSBÄ˘BÄG\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄRBÄÏBÄOBÄÌBÄOBÄÓBÄSBÄÙBÄSBÄ˘BÄGBÄÃÄ\ÄBÄ^BÄ‡√ÅSCROLL-FORWARDÄÎÄ	ÜÄ@DFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ[\ÄBÄmBÄ:BÄ:\ÄÄí\ÄÄ<BÄ>BÄ@BÄBBÄDBÄFBÄoBÄ‡BÄ˛ÏÑscrolling forward in the output-windowÄBÄõëBÄI¿BÄJÄP@¡PPéNPíNˇcPìNˇcPõNhC˛GP@ùOÄhBÄ[Ä1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄ\\ÄBÄ8\ÄBÄÍÏÅScroll ForwardBÄÏBÄlBÄÌBÄlBÄÓ\Ä•ÄVBÄÙBÄSBÄ˘BÄg\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄoBÄÏBÄlBÄÌBÄlBÄÓBÄpBÄÙBÄSBÄ˘BÄgBÄÃÄ\ÄBÄ^BÄ‡ÇSCROLL-BACKWARDÄÄÎÄ	ÜÄ@DFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄx\ÄBÄmBÄ:BÄ:\ÄÄí\ÄÄ<BÄ>BÄ@BÄBBÄDBÄFBÄoBÄ‡BÄ˛,Öscrolling backward in the output-windowÄÄBÄõëBÄI¿BÄJÄP@¡PJPéNPíNˇcPìNˇcPõNhCˇcP@ùOÄÖBÄxÄ1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄy\ÄBÄ8\ÄBÄÍ,ÇScroll BackwardÄBÄÏBÄ BÄÌBÄ BÄÓ\Ä•ÄVBÄÙBÄSBÄ˘BÄÑ\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄåBÄÏBÄ BÄÌBÄ BÄÓBÄ
-BÄÙBÄSBÄ˘BÄÑBÄÃÄ\ÄBÄ^BÄ‡√ÅSCROLL-TO-TOPÄÄÎÄÜÄ@DFÄ
-¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄï\ÄBÄmBÄ:BÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛lÖscrolling to the top in the output-windowÄÄBÄõëiÇPUT-ITEM-IN-WINDOW¿ÈÅITEM-OF-NUMBERÄP@¡PPJí@ïOÄ§BÄïÄ1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄñ\ÄBÄ8\ÄBÄÍÏÅScroll To TopÄBÄÏBÄ®BÄÌBÄ®BÄÓ\Ä•Ä<BÄÙBÄSBÄ˘BÄ°\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄ´BÄÏBÄ®BÄÌBÄ®BÄÓBÄ¨BÄÙBÄSBÄ˘BÄ°BÄÃÄ\ÄBÄ^BÄ‡ÇSCROLL-TO-BOTTOMÄÎÄFÄ@FÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ¥\ÄBÄmBÄ:BÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛¨Öscrolling to the bottom in the output-windowÄBÄõë)ÉPUT-LAST-ITEM-IN-WINDOWÄÄPåOÄ¬BÄ¥Ä1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄµ\ÄBÄ8\ÄBÄÍ,ÇScroll To BottomBÄÏBÄ∆BÄÌBÄ∆BÄÓ\Ä•Ä>BÄÙBÄSBÄ˘BÄ¿\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄ…BÄÏBÄ∆BÄÌBÄ∆BÄÓBÄ BÄÙBÄSBÄ˘BÄ¿BÄÃÄ\ÄBÄ^BÄ‡ÉÇSCROLL-TO-A-RELATIONÄÎÄ"ÜÄ@àFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ“\ÄBÄmBÄ†BÄ:\Ä√ÄINDEXÄBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛,ÑScroll to a particular relationÄÄÇ*TYPEOUT-WINDOW*—BÄõëÈÄINDEXÄ¿ÉÄGETP“ÈÄITEMSÄ¿BÄ¢¿BÄ£¿ÏÖ~%The relation ~S is not in the output-windowÄ¿BÄﬂíÅQPí@¡‰@QPääCx‰PA¡P	P@QíAïP
-PÅQúOÄÊBÄ“Ä1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄ”\ÄBÄ8\ÄBÄÍ¨ÇScroll To A RelationBÄÏBÄÍBÄÌBÄÍBÄÓ\Ä•ÄRBÄÙBÄSBÄª\ÄBÄΩ\ÄÄ*ÏÅRelation Name:BÄ¿BÄ~BÄ¡\ÄBÄ˛lÑName of the relation to scroll to:BÄƒBÄ*lÉScroll to the relation ==>BÄ˘BÄ‡\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄÌBÄÏBÄÍBÄÌBÄÍBÄÓBÄÓBÄÙBÄSBÄªBÄBÄ˘BÄ‡BÄÃÄ\ÄBÄ^BÄ‡ÉÇSEND-OUTPUT-TO-FILEÄÄÎÄ:éÜÄ@†FÄT¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ¸\ÄBÄmÉÄFILEBÄ:\ÄBÄªBÄ:BÄ:BÄ:BÄ:ÉÄLINEBÄ~ÅELEMENTÄ\ÄÄí\Ä	BÄï™ÄPROGp¿¨ÄZLCÄ,ÅDO-NAMEDp¿BÄuÏÇINHIBIT-STYLE-WARNINGSp¿BÄulÇCONDITION-BIND-IFÄp¿BÄuÏÅCONDITION-BINDp¿BÄuÏÇCATCH-CONTINUATION-IFÄp¿BÄulÇCATCH-CONTINUATIONp¿BÄuÏÄERRSETBÄoBÄ‡BÄ˛lÜSend the contents of the output window to a file.ÄÄp¿lÄEH¨Ç*CONDITION-HANDLERS*—BÄõ—BÄ·ëFÄZ¿p¿,ÄÏÄG2586Ä¿FÄW¿ÍÄERRORÄ¿p¿BÄ¯ÏÅERRSET-HANDLER¿iÅCHARACTERS¿iÅDIRECTIONÄ¿ÈÄOUTPUT¿iÇIF-DOES-NOT-EXISTÄ¿ÈÄCREATE¿™ÄOPEN“BÄ≠“lÇ~S is a bad file.Ä¿BÄﬂ“BÄ‰¿p¿BÄulÅLISTARRAYÄ“BÄõ“ÈÄITEM1Ä¿ÍÄTERPRI“ÍÄCLOSEÄíˇ›PJUPPT	P
-PPˇ€JCA√PJCB√÷ÅQ@√Pˇ›PPPPJ∫äJ!BJ!B\B@¡]_ZD¸@ÊPPÅQò<¸B€B—PääD¡C¡2¸CQDSE¡F€E7ÊE1ÊEÚEQ@Qê¸E5‰EQGœ‰G7ÊG1ÊGÚGQ¸G5ÙÂGS&ÊGS¸GWF¡F5‰FS¸FQ@QêÂ˝@QäCC√¡D≈DÃÁ@‰@QåROÄ4BÄ¸Ä1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄ˝\ÄBÄ8\ÄBÄÍ¨ÇSend Output To FileÄBÄÏBÄ8BÄÌBÄ8BÄÓ\Ä•Ä@FBÄÙBÄSBÄª\ÄBÄΩ\ÄÄ*lÅFile name:BÄ¿BÄñBÄ¡\ÄBÄ˛,ÖName of the file to send the output to:ÄBÄƒBÄ*¨ÑSend the output window contents to:ÄBÄ˘BÄ\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄ;BÄÏBÄ8BÄÌBÄ8BÄÓBÄ<BÄÙBÄSBÄªBÄ>BÄ˘BÄBÄÃÄ\ÄBÄ^BÄ‡ÉÅINTRODUCTIONÄÎÄFÄ@FÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄJ\ÄBÄmBÄ:BÄ:\ÄBÄoBÄ‡BÄ˛,ÑIntroduction to this interface.ÄÄBÄíÑOÄVBÄJÄ1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄK\ÄBÄ8\ÄBÄÍ¨ÅIntroductionBÄÏBÄZBÄÌBÄZBÄÓ\Ä•ÄÜBÄÙBÄBÄ˘BÄU\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄ]BÄÏBÄZBÄÌBÄZBÄÓBÄ^BÄÙBÄBÄ˘BÄUBÄÃÄ\ÄBÄ^BÄ‡BÄÄÎÄÜÄ@DFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄf\ÄBÄmBÄ:\ÄÅCOMMANDÄ\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛¨ãIntroduction to the interface. Help on any database object (COMMAND / RELATION / ATTRIBUTE).Äp¿BÄu¨ÄSELF—√Å*HELP-SUBMENU*ëÈÅSUBMENU-CHOOSE¿)ÅEXECUTEÄÄPPÃCˇì@¡‰PP@ïROÄyBÄfÄ1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄ\ÄBÄ8\ÄBÄÍ¨ÄHelpBÄÏBÄ}BÄÌBÄ}BÄÙBÄjBÄ˛,ãIntroduction to the interface. Help on any database object (COMMAND/RELATION/ATTRIBUTE).BÄ˘BÄs\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄÄBÄÏBÄ}BÄÌBÄ}BÄÙBÄjBÄ˛BÄÅBÄ˘BÄsBÄÃÄ\ÄBÄ^BÄ‡BÄaÄÎÄÜÄ@DFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄà\ÄBÄmBÄ:\ÄBÄp\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛,êSelect a database command from a menu. A choose-variable-values window will be presented to get the arguments for that command.ÄÄBÄu—CÇ*COMMAND-SUBMENU*ÄëBÄw¿BÄxÄPPÃCˇì@¡‰PP@ïROÄñBÄàÄ1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄa\ÄBÄ8\ÄBÄÍ¨ÅCommand MenuBÄÏBÄöBÄÌBÄöBÄÓ\ÄBÄ¡BÄÙBÄjBÄ˛,êSelect a database command from a menu. A choose-variable-values window will be presented to get the arguments for that command.ÄBÄ˘BÄî\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄùBÄÏBÄöBÄÌBÄöBÄÓBÄûBÄÙBÄjBÄ˛BÄüBÄ˘BÄîBÄÃÄ\ÄBÄ^BÄ‡BÄSÄÎÄÜÄ@DFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ¶\ÄBÄmBÄ:\ÄBÄp\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛láSelect an item from a menu to scroll in the output window.ÄBÄu—CÇ*DISPLAY-SUBMENU*ÄëBÄw¿BÄxÄPPÃCˇì@¡‰PP@ïROÄ¥BÄ¶Ä1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄS\ÄBÄ8\ÄBÄÍ,ÅDisplayÄBÄÏBÄ∏BÄÌBÄ∏BÄÙBÄjBÄ˛láSelect an item from a menu to scroll in the output window.BÄ˘BÄ≤\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄªBÄÏBÄ∏BÄÌBÄ∏BÄÙBÄjBÄ˛BÄºBÄ˘BÄ≤BÄÃÄ\ÄBÄ^BÄ‡ÉÄKILLÄÎÄ	FÄ@FÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ√\ÄBÄmBÄ:BÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛ÏÖTo exit the interface by killing the process.ÄÄBÄŒë©ÄKILLÄPà⁄ROÄ—BÄ√Ä1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄƒ\ÄBÄ8\ÄBÄÍ¨ÄKillBÄÏBÄ’BÄÌBÄ’BÄÓ\Ä•Ä îBÄÙBÄjBÄ˛ÏÖTo exit the interface by killing the process.ÄBÄ˘BÄœ\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄÿBÄÏBÄ’BÄÌBÄ’BÄÓBÄŸBÄÙBÄjBÄ˛BÄ€BÄ˘BÄœBÄÃÄ\ÄBÄ^BÄ‡ÉÄEXITÄÎÄFÄ@FÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ‚\ÄBÄmBÄ:BÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛¨ÑTo exit the interface by burying it.ÄBÄŒë©ÄBURYÄPåOÄBÄ‚Ä1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄ„\ÄBÄ8\ÄBÄÍ¨ÄExitBÄÏBÄÙBÄÌBÄÙBÄÓ\ÄeÄîBÄÙBÄjBÄ˛¨ÑTo exit the interface by burying it.BÄ˘BÄÓ\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄ˜BÄÏBÄÙBÄÌBÄÙBÄÓBÄ¯BÄÙBÄjBÄ˛BÄ˙BÄ˘BÄÓBÄÃ1Ä\Äp¿BÄuÏÅMAKE-INSTANCEÄ\ÄBÄ8p¿BÄUÏÅCOMMAND-TABLEÄ©ÄNAMEÏÇDatabase command tableBÄ˛ÏÅdatabase helpÄNÄ
-BÄˆ1Ä\Äp¿BÄu¨ÇBUILD-COMMAND-TABLEÄ\ÄBÄ8BÄˆ\ÄBÄ8BÄ‡\ÄBÄ8\ÄLBÄBÄaBÄSBÄƒBÄ„BÄBÄIBÄ"BÄBÄPBÄxBÄ†BÄÃBÄÙBÄ„BÄ{BÄBÄé	BÄ	BÄjBÄY	BÄ”
-BÄzBÄÿBÄ™BÄÁBÄ8BÄhBÄGBÄ¥BÄBÄ<BÄéBÄeBÄ∏BÄ·BÄs
-BÄ¨BÄG
-BÄ¶
-BÄÁ	BÄ˜ÄÆBÄ€BÄIBÄ%BÄîBÄxBÄØBÄÆBÄ	Ä‹BÄÎBÄEBÄ5ÄéÄbÄ≈Ä–BÄqBÄÚBÄ#BÄNBÄBÄBÄ)BÄMBÄ
-BÄKBÄ\BÄ0BÄñBÄµBÄyBÄ”BÄ˝Ä\ÄBÄ^BÄ‡BÄ“©ÄINITÄÎÄ[ÜÄ`DFÄ<¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ\ÄBÄmBÄ BÄèBÄ:\ÄBÄè\ÄBÄí\ÄBÄïBÄoBÄ‡ÄBÄõ—√Å*INTERACTION*Ä—CÅ*MENUPANE*—BÄ≥—BÄï—BÄa—BÄv—p¿BÄM¨ÅMOUSE-SHEETÄëBÄ@¿ÈÄPOP-UP¿BÄF¿)ÅSUPERIOR¿iÇITEM-LIST-POINTERÄ¿BÄ¿BÄ“©ÅMULTICOLUMNÄ¿)ÇCOLUMN-SPEC-LIST¿BÄS¿)ÅGET-PANE¿BÄÚ¿ÈÇSET-ITEM-LIST-POINTERÄ¿BÄj¿)ÇUPDATE-ITEM-LIST¿BÄA¿BÄ¿)ÉSET-SELECTION-SUBSTITUTEÄPPˇ›Pˇ›P
-PPP	J∫	¿PPˇ›Pˇ›Pˇ›P
-PPPJ∫¿PPˇ›Pˇ›P
-PPP	J∫¿PPÃCˇì¿PPêPàPPÃCˇì¿PPÃCˇì¿PPÃCˇïOÄ-BÄÄ1Ä\Äp¿BÄulÅBUILD-MENU\ÄBÄ8BÄj\ÄBÄ8BÄ‡)ÇITEM-LIST-ORDERÄ\ÄBÄ8\ÄBÄBÄƒBÄaBÄ„BÄS1Ä\ÄBÄ0\ÄBÄ8BÄ\ÄBÄ8BÄ‡BÄ3\ÄBÄ8\ÄBÄKBÄ
-1Ä\ÄBÄ0\ÄBÄ8BÄS\ÄBÄ8BÄ‡BÄ3\ÄBÄ8\Ä	BÄñBÄyBÄ0BÄ˝BÄ”p¿BÄUÏÇDISPLAY-COMMAND-TABLESp¿BÄU¨ÇEDIT-COMMAND-TABLESÄBÄ\BÄµ1Ä\ÄBÄQ\ÄBÄ8BÄa\ÄBÄ8\ÄBÄˆ\ÄBÄ8BÄW1Ä\ÄBÄ0\ÄBÄ8BÄa\ÄBÄ8BÄ‡BÄ3\ÄBÄ8\Ä>BÄ¨BÄG
-BÄs
-BÄ¶
-BÄ%BÄÁ	BÄ€BÄIBÄ˜ÄÆBÄîBÄxBÄÆBÄ	Ä‹BÄØBÄBÄ”
-BÄ„BÄé	BÄ	BÄjBÄBÄ{BÄY	BÄ"BÄBÄIBÄPBÄxBÄ†BÄÃBÄÙBÄ8BÄÁBÄzBÄÿBÄ™BÄhBÄGBÄ¥BÄBÄ<BÄeBÄéBÄ∏BÄ·BÄEBÄ5ÄéÄbÄ≈ÄÎBÄBÄ–BÄqBÄÚBÄ#BÄNBÄBÄ)BÄMiÇCOLUMN-LIST-ORDERÄ\ÄBÄ8\Ä\ÄlÅDefinitionBÄ/p¿BÄ0ÏÄHL12BI\Ä¨ÅManipulationBÄ/BÄX\ÄlÅOperatorsÄBÄ/BÄX\ÄÏÅOther FeaturesBÄ/BÄXBÄ:NÄ:BÄŒÄ\ÄBÄ^BÄ‡BÄwÄÎÄ1ÜÄ@ÑFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ`\ÄBÄmÅSUBMENUÄBÄ:\ÄÉÄSUPÄ\ÄBÄí\ÄBÄïBÄoBÄ‡ÄBÄ#—BÄ ëBÄ%¿FÄ.¿ÈÅSET-VISIBILITY¿©ÅBLINKER-LIST¿©ÅSET-SUPERIOR¿ÈÄCHOOSE¿FÄ0¿ÈÄBLINKÄÄPÅã@¡ˇ›Pˇ€UPˇ€PäBˇë	PPÅë
-PPÅQA]3ZP	P@QÅëPPPäBˇëOÄuBÄ`ÄÄ\ÄBÄ^BÄ‡BÄ¿©ÅCOMMAND-LOOPÄÎÄ
-ÜÄ@
-DFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄv\ÄBÄmBÄ:BÄ:\ÄBÄí\ÄBÄïBÄoBÄ‡ÄBÄ —BÄ·—BÄõëBÄ{¿©ÅCLEAR-SCREEN¿ÈÅSET-IO-BUFFERÄ¿iÅIO-BUFFERÄÄPä¿PàPàP@¡P	Pä@ïOÄÖBÄvÄÄ\ÄBÄ^BÄ‡BÄ¿iÇFETCH-AND-EXECUTEÄÄÎÄ	ÜÄ`DFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄÜ\ÄBÄmBÄ BÄèBÄ:\ÄBÄè\ÄBÄí\ÄBÄïBÄoBÄ‡ÄBÄõ—CÄCH—BÄŒ—p¿BÄMlÑ*REMOVE-TYPEOUT-STANDARD-MESSAGE*Ä—BÄ·ë)ÅACTIVE-P¿lÄ~%¿BÄﬂ“)ÅANY-TYIÄ¿ÈÅFLUSH-TYPEOUTÄÄPà‰P	P
-êP	P
-êPP
-êPä¿PåROÄöBÄÜÄÄBÄ
-ÄÎÄ(ÜÄ@HFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ
-\ÄCÄXÄBÄ:\ÄBÄìBÄ:\ÄBÄí\ÄBÄïÄBÄõ—BÄŒ—BÄï—BÄ·ëBÄñ¿lÄ~%¿BÄﬂ“BÄò¿BÄô¿BÄ‹¿lÄ~SÄPà‰PP	êPP	êPP	ê
-Pä@¡PàPA¡Pˇ€PÄQ	öAïOÄ©BÄ
-ÄÄ\ÄBÄ^BÄ‡BÄ¿)ÇEXECUTE-COMMANDÄÄÎÄÜ¿üı∑FÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ™\ÄBÄmBÄ BÄèBÄ:\ÄBÄèBÄ:\ÄBÄí\ÄBÄïÄBÄ‡ÄjÄ-Ä—BÄõëBÄ
-¿BÄ∞¿BÄ‹¿lÄ~S¿BÄﬂíP&‰PA¡Pˇ€	PP
-öAïROÄπBÄ™ÄÄ\ÄBÄ^BÄ‡BÄ“BÄ´ÄÎÄ	ÜÄ`HFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ∫\ÄBÄmBÄ BÄèBÄ:\ÄBÄèBÄì\ÄBÄí\ÄBÄïBÄoBÄ‡ÄBÄõ—BÄŒ—BÄï—BÄ·ëBÄñ¿lÄ~%¿BÄﬂ“BÄò¿BÄô¿\Ä™ÄMAPC\ÄBÄ\ÄBÄ\ÄÉÄVALÄ\ÄjÄIFBÄÃ\ÄÍÄPROGNÄ\ÄBÄïBÄõBÄ‹\ÄBÄﬂBÄ:lÄ~SBÄÃ\ÄBÄïBÄõBÄ¡jÄ//ÄPà‰PP	êPP	êPP	ê
-PäA¡PàOÄ÷BÄ∫ÄÄ\ÄBÄ^BÄ‡©ÇDESIGNATE-IO-STREAMSÄÎÄ	FÄ	@FÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ◊\ÄBÄmBÄ:BÄ:\ÄBÄoBÄ‡Äp¿BÄu,ÅDEBUG-IO—ÉÅERROR-OUTPUT—BÄ·—jÇ*STANDARD-OUTPUT*Ä—BÄÖ—BÄ ëP¿P¿P¿P¬ˇOÄÊBÄ◊ÄÄ\ÄBÄ^BÄ‡p¿BÄ¯,ÇFASLOAD-COMBINEDBÄ´ÄÎÄ
-	Ü¿üˆ˜FÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄj\ÄBÄ^BÄ‡)ÅCOMBINEDBÄ´\ÄBÄ p¿BÄ¯¨Ç.DAEMON-CALLER-ARGS.BÄ:\ÄBÄıp¿BÄ¯ÏÇ.DAEMON-MAPPING-TABLE.\ÄÄí\Äp¿BÄ¯¨ÇMETHOD-MAPPING-TABLEp¿BÄ¯¨ÑCOMPILE-TIME-REMEMBER-MAPPING-TABLEÄ)ÇFUNCTION-PARENTÄ\ÄBÄ‡p¿BÄuÏÇCOMPILE-FLAVOR-METHODSp¿BÄ¯lÉCOMBINED-METHOD-DERIVATION\ÄÄ´BÄ:BÄ:\ÄBÄ“\ÄBÄ^BÄ‡BÄ“BÄ´\ÄBÄ¿\ÄBÄ^BÄ‡BÄ¿BÄ´\ÄBÄ:\ÄBÄ^p¿BÄUlÇBASIC-COMMAND-LOOPBÄ´ÄBÄ‡Äp¿BÄ¯lÇSELF-MAPPING-TABLEë1Ä\Äp¿BÄu¨ÇFDEFINITION-LOCATION\ÄBÄ8BÄ	–1Ä]ÄBÄà]ÄBÄ8]ÄBÄ‡BÄÃBÄ¿FÄ¡0¿1Ä\ÄBÄ\ÄBÄ8BÄ–1Ä\ÄBÄ\ÄBÄ8BÄêPA¡@QAQ¡JP@@QPPPA@QAQ¡J	P@POÄ BÄÁÄÄ\ÄBÄ^BÄ‡BÄÈBÄáÄÎÄÜ¿ü¯˜FÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄj\ÄBÄ^BÄ‡BÄÚBÄáBÄÛBÄ:\ÄBÄıBÄ¯\ÄÄí\ÄBÄ¸BÄ˛BÄˇBÄBÄ\ÄBÄáBÄ:BÄ:\ÄBÄ¿\ÄBÄ^BÄ‡BÄ¿BÄá\ÄBÄ:\ÄBÄ^BÄBÄáÄBÄ‡ÄBÄë1Ä\ÄBÄ\ÄBÄ8BÄ/–BÄ¿1Ä\ÄBÄ\ÄBÄ8BÄ1êPA¡@QAQ¡JP@@QP¡JPBOÄ8BÄ!ÄÄ\ÄBÄ^BÄ‡BÄÈBÄwÄÎÄÜ¿ü¯˜FÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄj\ÄBÄ^BÄ‡BÄÚBÄwBÄÛBÄ:\ÄBÄıBÄ¯\ÄÄí\ÄBÄ¸BÄ˛BÄˇBÄBÄ\ÄBÄwBÄ:BÄ:\ÄBÄ¿\ÄBÄ^BÄ‡BÄ¿BÄw\ÄBÄ:\ÄBÄ^BÄ‰BÄwÄBÄ‡ÄBÄë1Ä\ÄBÄ\ÄBÄ8BÄG–1Ä]ÄBÄà]ÄBÄ8]ÄBÄ‡BÄÃBÄ‰¿1Ä\ÄBÄ\ÄBÄ8BÄIêPA¡@QAQ¡JP@@QP¡JPBOÄTBÄ9ÄÄ\ÄBÄ^BÄ‡BÄÈBÄÄÎÄÜ¿ü¯˜FÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄj\ÄBÄ^BÄ‡BÄÚBÄBÄÛBÄ:\ÄBÄıBÄ¯\Ä
-BÄí\ÄBÄ¸BÄ˛©ÇINTERNAL-FEF-OFFSETS\ÄFÄiÇINTERNAL-FEF-NAMES\Äp¿BÄ¯¨ÅCONTINUATIONBÄˇBÄBÄ\ÄBÄBÄ:BÄ:\ÄBÄ“\ÄBÄ^p¿BÄM¨ÇESSENTIAL-SET-EDGESÄBÄ“BÄ\ÄBÄ^p¿BÄMÏÇBASIC-CONSTRAINT-FRAMEBÄ“BÄ\ÄBÄ^p¿BÄMÏÅPROCESS-MIXINÄBÄ“BÄ\ÄBÄ^BÄBÄ“BÄ\ÄBÄ^BÄ‰BÄ“BÄ\ÄBÄ^BÄ‡BÄ“BÄ\ÄBÄ¿\ÄBÄ^p¿BÄM,ÇESSENTIAL-WINDOWBÄ¿BÄ\ÄBÄ^BÄlBÄ¿BÄ\ÄBÄ^p¿BÄMÏÑCONSTRAINT-FRAME-WITH-SHARED-IO-BUFFERBÄ¿BÄ\ÄBÄ^BÄÊBÄ¿BÄ\ÄÈÅINVERSE-AROUND\ÄBÄ^p¿BÄMÏÄSHEETÄBÄÄBÄ\ÄBÄ:\ÄBÄ^BÄÉBÄÄBÄ‡ÄBÄë\Ä)ÅINTERNALBÄUBÄg¿1Ä]ÄBÄà]ÄBÄ8]ÄBÄ‡BÄÃBÄÉ¿1Ä\ÄBÄ\ÄBÄ8BÄÅêPA¡@SPAQ@Q@UP≈JPBOÄèBÄUÄÄBÄÜÄÎÄTÜ¿üÊ˜FÄ7¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄj\ÄBÄáBÄ]BÄgBÄÛBÄ:\ÄBÄıBÄ¯\ÄBÄí\ÄBÄ¸BÄ˛ÄBÄ‡ÄBÄë1Ä]ÄBÄà]ÄBÄ8]ÄBÄ‡BÄÃBÄÊ¿1Ä\ÄBÄ\ÄBÄ8BÄ~–1Ä]ÄBÄà]ÄBÄ8]ÄBÄ‡BÄÃBÄ}¿1Ä\ÄBÄ\ÄBÄ8BÄ{–1Ä]ÄBÄà]ÄBÄ8]ÄBÄ‡BÄÃBÄl¿1Ä\ÄBÄ\ÄBÄ8BÄz–1Ä]ÄBÄà]ÄBÄ8]ÄBÄ‡BÄÃBÄy¿1Ä\ÄBÄ\ÄBÄ8BÄw–BÄã¿FÄ¡0¿1Ä\ÄBÄ\ÄBÄ8BÄÖ–1Ä\ÄBÄ\ÄBÄ8BÄj–1Ä]ÄBÄà]ÄBÄ8]ÄBÄ‡BÄÃBÄo¿1Ä\ÄBÄ\ÄBÄ8BÄm–1Ä]ÄBÄà]ÄBÄ8]ÄBÄ‡BÄÃBÄr¿1Ä\ÄBÄ\ÄBÄ8BÄp–BÄ¿1Ä\ÄBÄ\ÄBÄ8BÄs–BÄP¿1Ä\ÄBÄ\ÄBÄ8BÄt–1Ä\ÄBÄ\ÄBÄ8BÄuêPA¡@QP¡JP@@QP¡JP@@Q	P¡J
-P@@QP¡JP@@QPPPA@Q	P¡JP@@QP¡JP@@QP¡JP@@QP¡JP@@QP¡JP@@QAQ¡JP@POÄ’BÄÜÄÄ\ÄBÄ^BÄ‡BÄÈ©ÄSETÄÄÎÄvTÜ¿üä˜FÄ ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄj\ÄBÄ^BÄ‡BÄÚBÄ◊BÄÛBÄ:\ÄBÄıBÄ¯\ÄÄí\ÄBÄ¸BÄñBÄ˛BÄˇBÄBÄ\ÄBÄ◊©ÄCASE)ÇBASE-FLAVOR-LAST\Ä BÄ‰\ÄBÄ^BÄÉBÄ‰BÄ◊BÄÄ\ÄBÄ^BÄÉBÄ‰BÄ◊iÅCHAR-ALUFÄ\ÄBÄ^BÄÉBÄ‰BÄ◊iÅERASE-ALUF\ÄBÄ^BÄoBÄ‰BÄ◊ÈÅEXPOSED-PANESÄ\ÄBÄ^BÄÊBÄ‰BÄ◊ÈÅOLD-TYPEAHEADÄ\ÄBÄ^BÄBÄ‰BÄ◊BÄ\ÄBÄ^BÄBÄ‰BÄ◊)ÅTUTORIAL\ÄBÄ^BÄBÄ‰BÄ◊BÄÛ\ÄBÄ^BÄBÄ‰BÄ◊BÄ˜\ÄBÄ^BÄBÄ‰BÄ◊ÈÇSYSTEM-COMMAND-TABLESÄ\ÄBÄ^BÄBÄ‰BÄ◊ÈÇSPECIAL-COMMAND-TABLES\ÄBÄ^BÄBÄ‰BÄ◊BÄÓ\ÄBÄ^BÄBÄ‰BÄ◊iÅKBD-INPUTÄ\ÄBÄ^BÄBÄ‰BÄ◊)ÇINPUT-MECHANISMÄ\ÄBÄ^BÄBÄ‰BÄ◊ÈÅCOMMAND-ENTRYÄ\ÄBÄ^BÄBÄ‰BÄ◊)ÇCOMMAND-HISTORYÄ\ÄBÄ^BÄBÄ‰BÄ◊©ÇMAX-COMMAND-HISTORYÄ\ÄBÄ^BÄBÄ‰BÄ◊)ÉCOMMAND-EXECUTION-QUEUEÄ\ÄBÄ^BÄBÄ‰BÄ◊)ÇNUMERIC-ARGUMENT\ÄBÄ^BÄBÄ‰BÄ◊iÅBLIP-ALIST\ÄBÄ^BÄBÄ‰BÄ◊BÄ˙\ÄBÄ^BÄBÄ‰BÄ◊©ÅTYPEIN-MODES\ÄBÄ^BÄBÄ‰BÄ◊ÈÅREAD-FUNCTIONÄ\ÄBÄ^BÄBÄ‰BÄ◊ÈÄPROMPT\ÄBÄ^BÄBÄ‰BÄ◊iÅREAD-TYPEÄ\ÄBÄ^BÄBÄ‰BÄ◊ÈÅERROR-MESSAGEÄ\ÄBÄ^BÄBÄ‰BÄ◊BÄ\ÄBÄ^BÄBÄ‰BÄ◊BÄ\ÄBÄ^BÄBÄ‰BÄ◊ÈÇINHIBIT-RESULTS-PRINT?\ÄBÄ^BÄBÄ‰BÄ◊ÈÅOUTPUT-HISTORY\ÄBÄ^BÄBÄ‰BÄ◊iÇMAX-OUTPUT-HISTORYÄBÄ‡ÄBÄëBÄ¿1Ä\ÄBÄ\ÄBÄ8BÄ–1Ä\ÄBÄ\ÄBÄ8BÄ–1Ä\ÄBÄ\ÄBÄ8BÄ–1Ä\ÄBÄ\ÄBÄ8BÄ–1Ä\ÄBÄ\ÄBÄ8BÄ–1Ä\ÄBÄ\ÄBÄ8BÄ–1Ä\ÄBÄ\ÄBÄ8BÄ–1Ä\ÄBÄ\ÄBÄ8BÄ–1Ä\ÄBÄ\ÄBÄ8BÄ–1Ä\ÄBÄ\ÄBÄ8BÄ–1Ä\ÄBÄ\ÄBÄ8BÄ
-–1Ä\ÄBÄ\ÄBÄ8BÄ–1Ä\ÄBÄ\ÄBÄ8BÄ–1Ä\ÄBÄ\ÄBÄ8BÄ–1Ä\ÄBÄ\ÄBÄ8BÄ–1Ä\ÄBÄ\ÄBÄ8BÄ–1Ä\ÄBÄ\ÄBÄ8BÄ˛–1Ä\ÄBÄ\ÄBÄ8BÄ¸–1Ä\ÄBÄ\ÄBÄ8BÄ˙–1Ä\ÄBÄ\ÄBÄ8BÄ˘–1Ä\ÄBÄ\ÄBÄ8BÄ˜–1Ä\ÄBÄ\ÄBÄ8BÄı–1Ä\ÄBÄ\ÄBÄ8BÄÙ–1Ä\ÄBÄ\ÄBÄ8BÄÛ–1Ä\ÄBÄ\ÄBÄ8BÄÒ–1Ä\ÄBÄ\ÄBÄ8BÄ–BÄû¿1Ä\ÄBÄ\ÄBÄ8BÄÓ–BÄ¡¿1Ä\ÄBÄ\ÄBÄ8BÄÏ–BÄã¿1Ä\ÄBÄ\ÄBÄ8BÄÍ–1Ä\ÄBÄ\ÄBÄ8BÄË–1Ä\ÄBÄ\ÄBÄ8BÄÁ–BÄ‡¿BÄ◊¿\ÄBÄBÄBÄBÄBÄBÄBÄBÄBÄBÄBÄ
-BÄBÄBÄBÄBÄBÄ˛BÄ¸BÄ˙BÄ˘BÄ˜BÄıBÄÙBÄÛBÄÒBÄBÄÓBÄÏBÄÍBÄËBÄÁ¿p¿BÄ¯¨ÉCASE-METHOD-DEFAULT-HANDLERÄ“\ÄBÄBÄBÄBÄBÄBÄBÄBÄBÄBÄBÄ˙BÄ	BÄBÄBÄBÄBÄˇBÄ˝BÄ˚BÄÓBÄ¯BÄˆBÄ˜BÄÛBÄÚBÄBÄÔBÄÌBÄÎBÄÈBÄÄÄFÄ#¿BÄ¿BÄ¿BÄ¿BÄ¿BÄ¿BÄ¿BÄ¿BÄ¿BÄ¿BÄ¿BÄ˙¿BÄ	¿BÄ¿BÄ¿BÄ¿BÄ¿BÄˇ¿BÄ˝¿BÄ˚¿BÄÓ¿BÄ¯¿BÄˆ¿BÄ˜¿BÄÛ¿BÄÚ¿BÄ¿BÄÔ¿BÄÌ¿BÄÎ¿BÄÈ¿BÄÄ¿)ÇGET-HANDLER-FORÄ¿©ÇOPERATION-HANDLED-PÄ¿iÇCASE-DOCUMENTATION¿)ÇWHICH-OPERATIONS¿FÄ"¿FÄí¿FÄ¿FÄı¿FÄ˙¿FÄˇ¿FÄ¿FÄ	¿FÄ¿FÄ¿FÄ¿FÄ¿FÄ"¿FÄ'¿FÄ,¿FÄ1¿FÄ6¿FÄ;¿FÄ@¿FÄE¿FÄJ¿FÄO¿FÄT¿FÄY¿FÄ^¿FÄc¿FÄh¿FÄm¿FÄr¿FÄw¿FÄ|¿FÄÅ¿FÄÜ¿FÄã¿FÄã¿FÄã¿FÄëÄPA¡@W-r@QP¡JPB@QP¡JPB@QP¡JPB@QP¡J	PB@QP¡J
-PB@QP¡JPB@QP¡JPB@QP¡JPB@QP¡JPB@QP¡JPB@QP¡JPB@QP¡JPB@QP¡JPB@QP¡JPB@QP¡JPB@QP¡JPB@QP¡JPB@QP¡JPB@QP¡JPB@QP¡JPB@QP¡JPB@QP¡JPB@QP¡JPB@QP¡JPB@QP¡JPB@QP¡JPB@Q P¡J!PB@Q"P¡J#PB@Q$P¡J%PB@Q$P¡J&PB@Q$P¡J'PB(P)P*P@W@[+¨,ROÄ®BÄ÷ÄÄ\ÄBÄ^BÄ‡BÄÈiÅPROCESSESÄÄÎÄ
-Ü¿üˆ˜FÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄj\ÄBÄ^BÄ‡BÄÚBÄ™BÄÛBÄ:\ÄBÄıBÄ¯\ÄÄí\ÄBÄ¸BÄ˛BÄˇBÄBÄ\ÄBÄ™ÈÄAPPENDBÄÂ\ÄBÄ:\ÄBÄ^BÄÉBÄ™\ÄBÄ^BÄrBÄ™ÄBÄ‡ÄBÄëBÄ»¿1Ä\ÄBÄ\ÄBÄ8BÄ∫–BÄã¿1Ä\ÄBÄ\ÄBÄ8BÄπ–p¿BÄ¯,Å*APPENDÄíPA¡@QP¡JPA@QP¡JPA	îOÄ√BÄ©ÄÄ\ÄBÄ^BÄ‡BÄÈBÄ¡ÄÎÄ*lÜ¿üËÁFÄB¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄj\ÄBÄ^BÄ‡BÄÚBÄ¡BÄÛBÄ:\ÄÄıBÄ¯BÄ:p¿BÄM¨Å.QUEUE-LEFT.p¿BÄM¨ÉOLD-SCREEN-MANAGER-TOP-LEVELp¿BÄMlÄEÄ\ÄBÄí\Ä
-BÄÑp¿BÄu¨ÄNEQÄBÄ¸BÄ˛BÄï™ÄWHENp¿BÄMlÉDELAYING-SCREEN-MANAGEMENTp¿BÄulÅLEXPR-SENDp¿BÄulÇDESTRUCTURING-BINDp¿BÄ¯lÅMACROCALLÄBÄˇBÄp¿BÄ¯,ÇWRAPPER-SXHASHES\Ä\Ä\ÄBÄ^BÄy)ÅWRAPPERÄBÄ¡ÜÄÏ∆BÄ\ÄÄ¡BÄ:BÄ:\ÄBÄ¿\ÄBÄ^BÄÊBÄ¿BÄ¡\ÄBÄ^BÄrBÄ¿BÄ¡\ÄBÄ:\ÄBÄ^BÄyBÄ¿BÄ¡\ÄBÄÊBÄÂÄBÄ‡Äp¿BÄMlÉINHIBIT-SCREEN-MANAGEMENTÄ—p¿BÄM,ÉSCREEN-MANAGER-TOP-LEVEL—BÄ—BÄu—p¿BÄM¨ÇSCREEN-MANAGER-QUEUEë1Ä]ÄBÄà]ÄBÄ8]ÄBÄ‡p¿BÄM¨ÇSELECTION-SUBSTITUTE¿BÄ¡¿FÄn¿FÄc¿)ÇINFERIOR-SELECTÄ¿1Ä]ÄBÄà]ÄBÄ8]ÄBÄ‡p¿BÄM,ÅSUPERIOR¿BÄ»¿1Ä\ÄBÄ\ÄBÄ8BÄÎ–BÄû¿1Ä\ÄBÄ\ÄBÄ8BÄÍ–BÄ≥¿FÄ¡0¿1Ä\ÄBÄ\ÄBÄ8BÄÌ–p¿BÄMlÜSCREEN-MANAGE-DELAYING-SCREEN-MANAGEMENT-INTERNALÄ“p¿BÄM¨ÇSCREEN-MANAGE-QUEUEÄíPA¡@UB¡	‰
-PBQBJ	PBC›ˇ›Pˇ€UPD¡‰⁄ˇ›Pˇ€U‘“PPí‡ÿ@QP¡JP@@QP¡JP@@QPPPA¸J]hZ¸ÄPC¡DQ¿]sZPCQ±Ê
-‰CQEœ‰EQBEUBJP@˜˝OÄBÄƒÄÄ\ÄBÄ^BÄ‡BÄÈBÄœÄÎÄÜ¿ü˘˚FÄ	¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄj\ÄBÄ^BÄ‡BÄÚBÄœBÄÛBÄ:\ÄBÄı\Ä
-BÄí\ÄBÄ‡BÄa\ÄFÄBÄˇBÄBÄ‚\Ä\Ä\ÄBÄ^BÄÉBÄÊBÄœÜÄrı}BÄ\ÄBÄœBÄ:BÄ:\ÄBÄ“\ÄBÄ^p¿BÄM,ÇESSENTIAL-EXPOSEBÄ“BÄœ\ÄBÄ¿\ÄBÄ^p¿BÄMlÇESSENTIAL-ACTIVATEBÄ¿BÄœ\ÄBÄ^BÄrBÄ¿BÄœ\ÄBÄ:\ÄBÄ^BÄÉBÄœ\ÄBÄÊBÄ#ÄBÄ‡ÄBÄë\ÄBÄáBÄÄ¿p¿BÄM¨ÅSHEET-EXPOSEí@QPîOÄ6BÄÄÄBÄ2ÄÎÄ&Ü¿øÚ∑FÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄj\ÄBÄáBÄÄ\ÄBÄıBÄ:\ÄBÄ:BÄ¯\ÄBÄí\ÄBÄ¸BÄ˛ÄBÄ‡ÄBÄëBÄ»¿1Ä\ÄBÄ\ÄBÄ8BÄ.–1Ä]ÄBÄà]ÄBÄ8]ÄBÄ‡BÄÃBÄ-¿1Ä\ÄBÄ\ÄBÄ8BÄ+–BÄã¿FÄ¡0¿1Ä\ÄBÄ\ÄBÄ8BÄ0–1Ä]ÄBÄà]ÄBÄ8]ÄBÄ‡BÄÃBÄ)¿1Ä\ÄBÄ\ÄBÄ8BÄ'êPA¡ÿÄQP¡JP@ÄQP¡JP@ÄQ	P
-PPAÄQP¡JP@POÄYBÄ2ÄÄ\ÄBÄ^BÄ‡BÄÈ)ÅDESELECTÄÎÄ$[Ü¿üÌÁFÄ7¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄj\ÄBÄ^BÄ‡BÄÚBÄ[BÄÛBÄ:\ÄÄıBÄ¯BÄ:BÄœBÄ—BÄ”\ÄBÄí\Ä	BÄÑBÄ◊BÄ¸BÄ˛BÄÿBÄ⁄BÄ‹BÄﬁBÄ‡BÄˇBÄBÄ‚\Ä\Ä\ÄBÄ^BÄyBÄÊBÄ[ÜÄ"nBÄ\ÄÄ[BÄ:BÄ:\ÄBÄ¿\ÄBÄ^BÄÊBÄ¿BÄ[\ÄBÄ:\ÄBÄ^BÄyBÄ¿BÄ[\ÄBÄÊBÄiÄBÄ‡ÄBÄ—BÄÚ—BÄ—BÄÙëBÄ˙¿BÄ[¿FÄX¿FÄM¿BÄû¿1Ä\ÄBÄ\ÄBÄ8BÄm–BÄ≥¿FÄ¡0¿1Ä\ÄBÄ\ÄBÄ8BÄo–BÄ“BÄíPA¡@UB¡‰	PBQBJPBC›ˇ›
-Pˇ€UPD¡‰⁄ˇ›Pˇ€U‘“ÿ@QP¡JP@@QPPPA]RZ¸ÄPC¡DQ¿]]ZPCQ±Ê
-‰CQEœ‰EQBEUBJP@˜˝OÄzBÄZÄ1Ä\Äp¿BÄ¯,ÉCOMPILE-FLAVOR-METHODS-2\ÄBÄ8BÄ‡ÄCÅINTERFACEÄÄÎÄ
-ÜÄ`
-FÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄÄ\ÄBÄ BÄèBÄ:\ÄBÄè\ÄBÄí\ÄBÄïÄBÄ —BÄŒëBÄ‡¿p¿BÄMÏÇFIND-WINDOW-OF-FLAVORÄ“p¿BÄM¨ÅMAKE-WINDOWÄ“BÄœ¿BÄ¡ÄPàÊPä¿Pà	PåOÄêBÄÄÄÄÉÅCREATE-KEYSÄÄÎÄFÄFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄëBÄ:BÄ:BÄ:BÄ:ÄeÄD¿BÄ‡¿ÏÅRtms Interface¿\ÄBÄÄ¿p¿BÄMÏÅADD-SYSTEM-KEY“)ÅPROGRAMS¿¨ÄRTMS¿ÏÅRtms interface¿p¿BÄMlÉADD-TO-SYSTEM-MENU-COLUMNÄíPPPP†P	PP
-P§OÄ£BÄëÄ1Ä\ÄBÄëÄBÄµÄÎÄ	ÜÄ@	FÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄµBÄ:BÄ:BÄ:\ÄBÄí\ÄBÄ<BÄ>BÄ@BÄBBÄDBÄFBÄïÄBÄõëBÄ‹¿lÄ Ä¿BÄ¡¿BÄI¿BÄJÄPPêPàP@¡PPéNPíNˇcPìNˇcPõNhC˛GP@ùOÄ∞BÄµÄÄBÄÄÎÄ7ÜÄAFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ\ÄBÄÉÄARGÄBÄVÅITEM-NOÄBÄ:\ÄBÄ~BÄ	\ÄBÄa\ÄFÄÄBÄõ“BÄ1¿ÍÄPRIN1Ä“\ÄBÄáBÄÄÄÄ7‰ÄQÇQîÄ1˚ÁÄ˘ÒÄ5#‰ÄQAœ ‰A7‰AQÇQê¯˝A˙ÒA1¯ÁA5ÚÂAS&	ÊASÅ‰ASÔ˝ASÇQêÊ˝AW@¡P@QA[PÇ°ﬁ˝ROÄ¬BÄÄÄBÄ¿ÄÎÄFÄÄFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ¿\ÄBÄ~BÄVBÄ:BÄ:BÄ:ÄBÄõíÄ5‰ÄS¸ÄQÅQîOÄÀBÄ¿ÄÄBÄ¢ÄÎÄJÜÄ@HFÄ,¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ¢\ÄBÄBÄ:\ÄBÄ~BÄ	\ÄBÄí\ÄBÄïÄBÄõ—BÄŒ—BÄï—BÄ·ëBÄõ“BÄ1¿BÄø“lÄ~%¿BÄﬂ“BÄò¿BÄôÄÄ7ÊÄ1ÊÄÚÄQPîÄ50‰ÄQAœ ‰A7ÊA1ÊAÚAQ¸A5ÙÂAS&	ÊASÅ‰AW¸AWP	êË˝AW@¡@5‰@W¸@QPêﬁ˝P
-PêP
-PêPPêPàPåROÄÿBÄ¢ÄÄBÄ§ÄÎÄ7äÜÄ@xFÄS¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ§\ÄBÄBÄ:\Ä√ÄITEMSÄÉÅITEM-NUMBERÄÉÅMOD-RELATION√ÅMOD-ATTRIBUTESBÄ_BÄ:BÄó	ÅNUMBERSÄBÄ	BÄ:BÄ:BÄ:BÄ√BÄÃ\ÄBÄí\ÄÄBÄÍÄDOLISTBÄBÄBÄïÄCÅ*PKG-NAME*—√Ç*SYSTEM-RELATION-KEY*Ä—ÉÉ*SYSTEM-RELATION-ATTRIBUTES*—BÄõëÈÅNUMBER-OF-ITEM¿ÇSYSTEM-RELATIONÄ¿\ÄBÄ∏BÄ∫¿ÅQTRIEVEÄ“BÄ¢“BÄß“BÄ‚¿BÄ„“¨ÉDelete the indicated tuple?Ä¿p¿BÄMÏÅMOUSE-CONFIRMÄ“BÄ¬“BÄ‰
-¿™ÄANDÄ¿ÍÄEQUALÄ¿BÄ•“BÄ8¿BÄ≠“FÄ ¿BÄ“©ÅDELETE-ITEMÄ¿ÉÄPUTPíPÄQíA¡PP	PPˇ›
-™E¡‰ESF¡G€PFSíäPíG¡‰AQGSxÊAQGWy	ÊGQD¡PFSíäB¡FWC¡E≈‚ÁBA‰Pà>‰ÄQHœ‰H5¸Â@QHUí@¡˜˝BQPPE€E—CQ@QK¡J¡I¡¸IQJSKSM¡L¡PLQääPMQäíöCI√¡J≈K≈J‰KÈÁEQ
-CPPABv
-‰PAQêBQDSDWˇmíPúROÄ˘BÄ§ÄÄBÄ£ÄÎÄ-~)ÜÄ‡-@FÄ´¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ£\ÄBÄBÄ:\ÄBÄ‚BÄ„√ÅATTRIBUTE-VARSCÅMOD-TUPLEÄBÄ‰BÄÂ√ÄBLANKSBÄW
-√ÄTUPLEÄBÄ:BÄó	BÄÊBÄ	BÄ:BÄ:BÄ√BÄÃBÄ:BÄ:\ÄBÄí\ÄÄBÄBÄÈBÄBÄBÄï¿ÜÄì ÄÉÉ*LINE-AREA-VALUES-MODIFIEDP*—BÄÍ—BÄÎ—BÄÏ—BÄõëBÄÌ¿BÄÓ¿\ÄBÄ∏BÄ∫¿BÄ“BÄ¢“BÄß“BÄ‚¿BÄ„“BÄ≠“BÄ¬“jÄ+Ä“p¿BÄ¯lÇSIMPLE-MAKE-ARRAYÄ“¨ÄMODÄ¿√ÄABORTÄ¿FÄÏ¿BÄ•“BÄ*¿,ÉModify the relation: ~SÄ¿BÄﬂ“)ÅFUNCTION¿√ÇLINE-AREA-DOMAIN-CHECK¿ÈÅMARGIN-CHOICES¿\ÄÏÄDo ItÄ\ÄÏÄAbortÄ\ÄÍÄTHROWÄ\ÄBÄ8BÄBÄÃ¿p¿BÄMÏÇCHOOSE-VARIABLE-VALUES“BÄ8¿BÄ“ÉÅPRINT-TUPLEÄ“BÄ∫¿BÄ›
-¿BÄ‰
-¿BÄÙ¿BÄı¿FÄ ¿BÄ„
-“BÄ˜¿©ÅINSERT-ITEMÄÄ	PÄQíA¡
-PPPPˇ›™I¡‰ISJ¡K€PJSíäPíK¡‰AQKSxÊAQKWyÊPJSíäD¡JWE¡I≈‰ÁD—‰ÄQLœ‰L5¸ÂGQLSäCäíG¡@QLUí@¡Ò˝EQäCˇkGQPEˇa	Jˇ€ˇ€ J™F¡I€I—EQN¡M¡¸MQNSO¡POQíäCM√¡N≈NÛÁIQB√@QM¡I¡	¸MSP¡ISPQä»I≈M≈I‰MÙÁ⁄PPTN€N—BQEQI¡R¡Q¡
-¸QQRSISäíCQ√¡R≈I≈R‰IÚÁNQPˇ€PDQöPPPPJ ∫\ˇ‰⁄c‰R€R—BQN¡M¡	¸MQ!PNSûCíCM√¡N≈NıÁRQH¡R€R—HQN¡M¡¸MQNS"äCM√¡N≈N˜ÁRQäGQˇ€ˇ›FQˇ€#≤BC¡DQ$PEQ%PHQ&P'PR€R—EQ@QN¡M¡I¡¸IQMSNSP¡O¡(PPOQäíä!PPQäíöCI√¡M≈N≈M‰NÁÁRQ
-C)P*PABv‰+PAQê,PAQCQúROÄ"BÄ£ÄÄBÄÄÎÄÜÄ`FÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ\ÄBÄ BÄèBÄ:\ÄBÄèBÄ:ÄBÄ
-ë‹ROÄ,BÄÄÄBÄ©ÄÎÄ5@µÜÄ`5`FÄu¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ©\ÄBÄ†BÄ BÄèBÄ:\ÄBÄèBÄBÄ:BÄ:BÄ:ÉÄOLDÄÉÄNEWÄBÄ¢\ÄBÄí\ÄBÄBÄBÄBÄU*ÅSEVENTHÄÍÄSIXTHÄÍÄFIFTHÄBÄÉÍÄTHIRDÄÍÄSECONDBÄÑÄBÄ†—ÅNEW-RENÄ—ÅNEW-DELÄ—ÅNEW-ADDÄ—ÅNEW-KEYÄ—ÅNEW-STOÄ—ÅNEW-IMPÄ—ÅNEW-TUPÄ—BÄò	—ÅNEW-DOCÄ—ÅNEW-DIRÄ—ÅOLD-RENÄ—ÅOLD-DELÄ—ÅOLD-ADDÄ—ÅOLD-KEYÄ—ÅOLD-STOÄ—ÅOLD-IMPÄ—ÅOLD-TUPÄ—ÅOLD-DOCÄ—ÅOLD-DIRÄ—ÅOLD-ATTÄ—BÄõ—É*PROVIDE-ERROR-MESSAGES*ë\ÄBÄ∫√ÅSAVE-DIRECTORYBÄ°BÄW
-ÉÇIMPLEMENTATION-TYPEÄBÄ0BÄ¢¿ÉÅGET-RELATION“BÄ2“lÇERROR - Relation Ä¿BÄì“BÄø“,Ñ does not exist in the database ¿BÄ¿FÄº¿\ÄBÄò	ÏÅRelation NameÄBÄ˛¨ÉTo change the relation name.BÄƒ¿¨Ç     Attributes: ~SÄ¿BÄﬂ“\Ä
-\ÄBÄAÏÅAdd attributesBÄ˛¨ÜTo add attributes specify attribute descriptor pair.BÄƒ\ÄBÄ@lÇDelete attributesÄBÄ˛,áTo delete attributes, specify a list of the attributes.ÄBÄƒ\ÄBÄ?lÇRename attributesÄBÄ˛ÏáTo rename attributes, specify a list of the type <(old new)>.ÄBÄƒlÄ Ä\ÄBÄD¨ÇImplementation-typeÄBÄ˛ÏÑTo change the type of implementation.ÄBÄƒ\ÄBÄClÇStorage StructureÄBÄ˛,ÖTo change the type of storage structure.BÄƒ\ÄBÄB¨ÄKeyÄBÄ˛ÏÉTo change the key attributes.ÄBÄƒ\ÄBÄFÏÅDocumentationÄBÄ˛ÏÑTo change the relation documentation.ÄBÄƒ\ÄBÄGÏÅSave DirectoryBÄ˛¨áTo change the directory in which this relation can be saved.BÄƒ\ÄBÄE¨ÅTuple formatBÄ˛ÏÖTo change the format in printing the relation.BÄƒ¿BÄ“BÄ*¿lÉChange the features of ~SÄ¿BÄ¿\ÄÏÄDo ItÄ\ÄÏÄAbortÄ\ÄBÄ\ÄBÄ8BÄBÄÃ¿BÄ“\Ä
-BÄ†BÄJBÄIBÄHBÄPBÄOBÄNBÄMBÄLBÄK¿\Ä
-BÄò	BÄABÄ@BÄ?BÄGBÄFBÄEBÄDBÄCBÄB¿\Ä
-BÄó	ÅADD-ATTRÉÅDELETE-ATTRÄÉÅRENAME-ATTRÄBÄ†BÄ°BÄﬂBÄ£BÄ¨BÄ¢¿Å*EQUALPÄ¿BÄ≠“BÄ“BÄ¬“BÄé	íÄQ÷PPˇ›öBA¡AÊ	‰ÄPàPà PàPàRAS¿AW¿A[¿AQB¿AUB¿AYB¿AQBB¿⁄⁄⁄P¿P¿P¿P
-¿P	¿P¿P¿P¿P¿P¿!P"PT#Pˇ€$PP%ö&P'ö(Pˇ€)PP%ö*P+P,™\ˇ)ÊA€-PB¡.PC¡/PD¡¸BSCSDSG¡F¡E¡0PEQFQ1ö2àÊAQGQFQ2ä1í3íA¡B≈C≈D≈B‰C‰D‰ÁA‰PAQ4îROÄ BÄ©Ä1Ä\Äp¿BÄ¯,ÑFASL-RECORD-FILE-MACROS-EXPANDED\ÄBÄ8\Ä)\Ä™ÅDEFPARAMETERÜÄI	\Äp¿BÄulÅDEFFLAVORÄÜÄ	Ø\Äp¿BÄulÅDEFMETHODÄÜÄ6y\ÄÍÄDEFUNÄÜÄ'\Äp¿BÄulÅDEFCOMMANDÜÄ.+\ÄBÄÜÄx
-\ÄBÄ>ÜÄ{öÕ\ÄBÄ=ÜÄ:}n\ÄBÄ<ÜÄZiÛ\ÄBÄ;ÜÄ{ƒ≤\ÄBÄ:ÜÄ2ª=\ÄBÄÈÜÄ"‚á\ÄBÄÜÄ.Ÿã\ÄBÄ‡ÜÄ.-U\ÄBÄﬁÜÄq\ÄBÄ‹ÜÄc&p\ÄBÄ⁄ÜÄaÇ\ÄBÄÿÜÄ,a\ÄBÄ◊ÜÄ~ki\ÄBÄ˛ÜÄBXõ\ÄBÄ¸ÜÄVó√\ÄBÄÜÄ-i\ÄBÄÜÄ~…z\ÄBÄÜÄ<pë\ÄBÄÜÄ`sN\ÄBÄÜÄ|ƒÙ\ÄBÄÜÄ(Ã¢\ÄBÄÜÄ*˝j\ÄBÄÜÄ=Ã#\ÄBÄFÜÄ3œÚ\ÄBÄDÜÄ*Ô\ÄBÄBÜÄV>\ÄBÄ@ÜÄ&>\ÄBÄ>ÜÄ:>\ÄBÄ<ÜÄ>\ÄBÄ/ÜÄñΩ\ÄBÄUÜÄN¶™\ÄBÄÑÜÄz(á\ÄBÄÉÜÄxıø\ÄBÄñÜÄ%¡ \ÄBÄïÜÄaM*ÄÄName:ÄBÄ¿BÄüBÄ¡\ÄBÄ˛lÑName of the directory to write to.BÄƒ\ÄÄ*ÏÅType of SAVE:ÄBÄ¿BÄ™BÄ¡\ÄBÄ˛¨ÖSave type. It can be either XLD or COMMAND.ÄBÄƒ\ÄÄ*lÅMust Save:BÄ¿BÄ:BÄ¡\ÄBÄ˛ÏáSave the relation even if the relation has not been modified.ÄBÄ¶BÄ*lÑGive parameters for SAVE RELATION:BÄ˘BÄú\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄ•ÄÏBÄ¢ÄÌBÄ¢ÄÓBÄ¶Ä˛BÄ®ÄÙBÄ©ÄªBÄ¨Ä˘BÄúÄÃÄ\ÄBÄ^BÄ‡ÇSAVE-TRANSACTIONÄÎÄ
- ÜÄAFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄƒ\ÄBÄmÉÅTRANSACTIONÄBÄ∑BÄªBÄ:\ÄBÄßBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛ÏßSave a transaction on disk.
-
-   TRANSACTION - Name of the transaction.
-   DIRECTORY   - Name of the directory in which this transaction is to be stored.
-   PATHNAME    - Name of the file in which it is to be stored.  (SAVE-TRANSACTION TRANSACTION &REST KEYWORD-LIST &KEY &OPTIONAL DIRECTORY PATHNAME &ALLOW-OTHER-KEYS)ÄBÄõëBÄ‹¿lÄ~S¿BÄ≈¿BÄû¿BÄ†¿BÄ≠“BÄﬂ“BÄ≈íPA¡Pˇ€PPÅQPÉQPÇQ	¢@√	ö
-öAëÅQ@QîOÄ‘ÄƒÄ1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄ≈\ÄBÄ8\ÄBÄÍ,ÇSave TransactionBÄÏBÄÿÄÌBÄÿÄÓ\Ä\ÄBÄLÄBÄ˛,ÜUsed to save a transaction on a given directory.BÄÙ\Ä\ÄBÄaBÄ˜ÏÅOther FeaturesBÄª\ÄÄΩ\ÄÄ*lÇTransaction Name:ÄBÄ¿BÄÜBÄ¡\ÄBÄ˛¨ÑName of the transaction to be saved.BÄƒ\ÄÄ*,ÇDirectory Name:ÄBÄ¿BÄüBÄ¡\ÄBÄ˛lÑName of the directory to write to.BÄƒ\ÄÄ*lÅPathname:ÄBÄ¿BÄñBÄ¡\ÄBÄ˛,
-The name of the file into which the transaction forms will be stored. It defaults to <transaction>.lispÄBÄƒBÄ*ÏÑGive parameters for SAVE TRANSACTION:ÄBÄ˘BÄ“\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄ€ÄÏBÄÿÄÌBÄÿÄÓBÄ‹Ä˛BÄﬁÄÙBÄﬂÄªBÄ‚Ä˘BÄ“ÄÃÄ\ÄBÄ^BÄ‡√ÇDEFINE-IMPLEMENTATIONÄÄÎÄ	ÜÄ@»FÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄˆ\ÄBÄm√ÅIMPLEMENTATIONBÄ°BÄ:\ÄBÄßBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛¨ÆDefine a new implementation.
-
-   IMPLEMENTATION-NAME - Name of the implementation to be defined. All the implementation-specific
-                         accessor functions are expected to be defined.
-   DOCUMENTATION       - Description of this implementation.  (DEFINE-IMPLEMENTATION IMPLEMENTATION-NAME &REST KEYWORD-LIST &KEY &OPTIONAL DOCUMENTATION &ALLOW-OTHER-KEYS)ÄBÄõëBÄ‹¿lÄ~S¿BÄ˜¿BÄ°¿BÄ≠“BÄﬂ“BÄ˜íPA¡Pˇ€PPÅQPÇQí@√ö	öAëÅQ@Q
-îOÄBÄˆÄ1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄ˜\ÄBÄ8\ÄBÄÍÏÇDefine ImplementationÄBÄÏBÄ
-BÄÌBÄ
-BÄÓ\Ä\ÄBÄêBÄÕBÄ˛lÑUsed to define an implementation.ÄBÄÙ\Ä\ÄBÄaBÄ˜lÅDefinitionBÄª\ÄBÄΩ\ÄÄ*¨ÇImplementation Name:BÄ¿BÄ:BÄ¡\ÄBÄ˛ÏåName of the implementation. Implementation-dependent routines are expected to be defined by the user.ÄBÄƒ\ÄÄ*ÏÅDocumentation:BÄ¿BÄ¥BÄ¡\ÄBÄ˛ÏÑDocumentation for the implementation.ÄBÄ-BÄ*lÖGive parameters for DEFINE IMPLEMENTATION:BÄ˘BÄ\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄBÄÏBÄ
-BÄÌBÄ
-BÄÓBÄBÄ˛BÄBÄÙBÄBÄªBÄBÄ˘BÄBÄÃÄ\ÄBÄ^BÄ‡ÉÅDEFINE-INDEXÄÎÄ)ÜÄA»FÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ$\ÄBÄmBÄ∏CÅINDEX-NAME√ÅKEY-ATTRIBUTESCÇSTORAGE-STRUCTUREÄÅPRIORITYBÄ°BÄ:\ÄBÄßBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛ÏøñDefine an index on a relation in the active database.
-
-    RELATION-NAME - Name of the relation on which the index will be defined.
-    NAME - Name of the index to be defined
-    KEY - List of attributes names which form the key of the index.
-    STORAGE-STRUCTURE - The name of a RTMS defined storage structure upon which will be used as the index structure.
-    PRIORITY - A numerical value which determines the order in which RTMS will search multiple indices of a relation
-               for a possible key. The number one receives the highest consideration, if it fails the next index in
-               value is attempted.
-    DOCUMENTATION - A string describing this index.  (DEFINE-INDEX RELATION-NAME &REST KEYWORD-LIST &KEY &OPTIONAL NAME DOCUMENTATION STORAGE-STRUCTURE KEY PRIORITY &ALLOW-OTHER-KEYS)ÄÄBÄõëBÄ‹¿lÄ~S¿BÄ%¿ÉÄNAME¿BÄ¢¿BÄ¨¿BÄ1¿BÄ°¿BÄ≠“BÄﬂ“BÄ%íPA¡Pˇ€PPÅQPÇQPÉQ	PÑQ
-PÖQPÜQ
-J∫@√ööAëÅQ@QîOÄ8BÄ$Ä1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄ%\ÄBÄ8\ÄBÄÍ¨ÅDefine IndexBÄÏBÄ<BÄÌBÄ<BÄÓ\Ä\ÄBÄê•Ä@IBÄ˛,ÜUsed to define a secondary index on a relation.ÄBÄÙ\Ä\ÄBÄaBÄ˜lÅDefinitionBÄª\Ä	BÄΩ\ÄÄ*ÏÅRelation Name:BÄ¿BÄ:BÄ¡\ÄBÄ˛láName of the relation upon which the index will be defined.BÄƒ\ÄÄ*¨ÅIndex Name:ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛,ÑName of the index to be defined.BÄ-\ÄÄ*,ÇKey Attributes:ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛láList of attribute names which form the key for this index.BÄƒ\ÄÄ*lÇStorage Structure:BÄ¿¨ÄAVLÄBÄ¡\ÄBÄ˛,ÜThe storage structure used to define the index.ÄBÄ-\ÄÄ*lÅPriority:ÄBÄ¿FÄ
-BÄ¡\ÄBÄ˛ÏãA numerical value which indicates the priority given to this index. 1 is the highest priority.BÄë\ÄÄ*ÏÅDocumentation:BÄ¿BÄ¥BÄ¡\ÄBÄ˛¨ÉDocumentation for the index.BÄ-BÄ*lÑGive parameters for DEFINE INDEX:ÄBÄ˘BÄ5\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄ?BÄÏBÄ<BÄÌBÄ<BÄÓBÄ@BÄ˛BÄCBÄÙBÄDBÄªBÄGBÄ˘BÄ5BÄÃÄ\ÄBÄ^BÄ‡ÉÅMODIFY-INDEXÄÎÄ+ÜÄBFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄi\ÄBÄmBÄ∏BÄ.√ÅNEW-INDEX-NAMEBÄ/BÄ0BÄ1BÄ°BÄ:\ÄBÄßBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛ÏøΩModify an index on a relation in the active database.
-
-    RELATION-NAME - Name of the relation on which the index to be modified is defined
-    INDEX-NAME - Name of the index to be modified
-    NEW-NAME - New name for the specified index
-    KEY - List of attributes names which form the key of the index.
-    STORAGE-STRUCTURE - The name of a RTMS defined storage structure upon which will be used as the index structure.
-    PRIORITY - A numerical value which determines the order in which RTMS will search multiple indices of a relation
-               for a possible key. The number one receives the highest consideration, if it fails the next index in
-               value is attempted.
-    DOCUMENTATION - A string describing this index.  (MODIFY-INDEX RELATION-NAME INDEX-NAME &REST KEYWORD-LIST &KEY &OPTIONAL NEW-NAME DOCUMENTATION STORAGE-STRUCTURE KEY PRIORITY &ALLOW-OTHER-KEYS)ÄBÄõëBÄ‹¿lÄ~S¿BÄj¿ÅNEW-NAME¿BÄ¢¿BÄ¨¿BÄ1¿BÄ°¿BÄ≠“BÄﬂ“BÄjíPA¡Pˇ€PPÅQÇQPÉQPÑQ	PÖQ
-PÜQPáQ
-J∫@√¢öAëÅQÇQ@QúOÄzBÄiÄ1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄj\ÄBÄ8\ÄBÄÍ¨ÅModify IndexBÄÏBÄ~BÄÌBÄ~BÄÓ\Ä\ÄBÄBÄBBÄ˛,ÜUsed to define a secondary index on a relation.ÄBÄÙ\Ä\ÄBÄaBÄ˜¨ÅManipulationBÄª\Ä
-BÄΩ\ÄÄ*ÏÅRelation Name:BÄ¿BÄ:BÄ¡\ÄBÄ˛¨àName of the relation upon which the index to be modified is defined.BÄƒ\ÄÄ*¨ÅIndex Name:ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛lÑName of the index to be modified.ÄBÄ-\ÄÄ*,ÇNew Index Name:ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛ÏÇNew name of the index.BÄ-\ÄÄ*,ÇKey Attributes:ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛láList of attribute names which form the key for this index.BÄƒ\ÄÄ*lÇStorage Structure:BÄ¿BÄ:BÄ¡\ÄBÄ˛,ÜThe storage structure used to define the index.ÄBÄ-\ÄÄ*lÅPriority:ÄBÄ¿FÄ
-BÄ¡\ÄBÄ˛ÏãA numerical value which indicates the priority given to this index. 1 is the highest priority.BÄë\ÄÄ*ÏÅDocumentation:BÄ¿BÄ¥BÄ¡\ÄBÄ˛¨ÉDocumentation for the index.BÄ-BÄ*lÑGive parameters for DEFINE INDEX:ÄBÄ˘BÄw\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄÅBÄÏBÄ~BÄÌBÄ~BÄÓBÄÇBÄ˛BÄÑBÄÙBÄÖBÄªBÄàBÄ˘BÄwBÄÃÄ\ÄBÄ^BÄ‡ÉDEFINE-STORAGE-STRUCTUREÄÎÄ	ÜÄ@»FÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ≠\ÄBÄmBÄ0BÄ°BÄ:\ÄBÄßBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛,≤Define a new storage structure.
-
-   STORAGE-STRUCTURE-NAME - Name of the storage-structure to be defined. All the storage-structure-specific
-                            accessor functions are expected to be defined.
-   DOCUMENTATION          - Description of this storage-structure.  (DEFINE-STORAGE-STRUCTURE STORAGE-STRUCTURE-NAME &REST KEYWORD-LIST &KEY &OPTIONAL DOCUMENTATION &ALLOW-OTHER-KEYS)ÄÄBÄõëBÄ‹¿lÄ~S¿BÄÆ¿BÄ°¿BÄ≠“BÄﬂ“BÄÆíPA¡Pˇ€PPÅQPÇQí@√ö	öAëÅQ@Q
-îOÄºBÄ≠Ä1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄÆ\ÄBÄ8\ÄBÄÍ,ÉDefine Storage StructureBÄÏBÄ¿BÄÌBÄ¿BÄÓ\Ä\ÄBÄêBÄLÄ˛lÑUsed to define a storagestructure.BÄÙ\Ä\ÄBÄaBÄ˜lÅDefinitionBÄª\ÄBÄΩ\ÄÄ*,ÉStorage structure name:ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛¨
-Name of the storage structure. Storage-structure-dependent routines are expected to be defined by the user.ÄBÄƒ\ÄÄ*ÏÅDocumentation:BÄ¿BÄ:BÄ¡\ÄBÄ˛,ÖDocumentation for the storage structure.BÄ-BÄ*ÏÖGive parameters for DEFINE STORAGE STRUCTURE:ÄBÄ˘BÄ∫\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄ√BÄÏBÄ¿BÄÌBÄ¿BÄÓBÄƒBÄ˛BÄ∆BÄÙBÄ«BÄªBÄ BÄ˘BÄ∫BÄÃÄ\ÄBÄ^BÄ‡√ÅDEFINE-DOMAINÄÄÎÄ#ÜÄAHFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ⁄\ÄBÄm√ÄDOMAINp¿BÄu¨ÄDEFÄBÄ°BÄﬂBÄ:\ÄBÄßBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛¨ØDefine new domain. Corresponding predicate is expected to be defined prior to this operation.
-
-   DOMAIN-NAME     - Name of the domain to be defined.
-   DOCUMENTATION   - Describes the new domain.
-   FORMAT          - Print width for attributes belonging to this domain.  (DEFINE-DOMAIN DOMAIN-NAME &REST KEYWORD-LIST &KEY &OPTIONAL DEFAULT DOCUMENTATION FORMAT &ALLOW-OTHER-KEYS)ÄBÄõëBÄ‹¿lÄ~S¿BÄ€¿ÅDEFAULTÄ¿BÄ°¿BÄﬂ¿BÄ≠“BÄﬂ“BÄ€íPA¡Pˇ€PPÅQPÇQPÉQ	PÑQ
-≤@√
-ööAëÅQ@QîOÄÌBÄ⁄Ä1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄ€\ÄBÄ8\ÄBÄÍÏÅDefine DomainÄBÄÏBÄÒBÄÌBÄÒBÄÓ\Ä•Ä`DBÄ˛,ÉUsed to define a domain.BÄÙ\Ä\ÄBÄaBÄ˜lÅDefinitionBÄª\ÄBÄΩ\ÄÄ*¨ÅDomain Name:BÄ¿BÄ:BÄ¡\ÄBÄ˛Ï Name of the domain. Domain predicate is expected to be defined prior to this.ÄBÄƒ\ÄÄ*ÏÅDefault value:BÄ¿BÄ:BÄ¡\ÄBÄ˛ÏÉDefault value for this domain.BÄƒ\ÄÄ*ÏÅDocumentation:BÄ¿BÄ:BÄ¡\ÄBÄ˛ÏÉDocumentation for the domain.ÄBÄ-\ÄÄ*,ÇDefault width :ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛ÏÖThe default width to be used for this domain.ÄBÄƒBÄ*lÑGive parameters for DEFINE DOMAIN:BÄ˘BÄÍ\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄÙBÄÏBÄÒBÄÌBÄÒBÄÓBÄıBÄ˛BÄ˜BÄÙBÄ¯BÄªBÄ˚BÄ˘BÄÍBÄÃÄ\ÄBÄ^BÄ‡√ÅMODIFY-DOMAINÄÄÎÄ#ÜÄAHFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ\ÄBÄmBÄ‰BÄÊBÄ°BÄﬂBÄ:\ÄBÄßBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛l∞Modify the default format, value, and documentation of a domain.
-
-   DOMAIN-NAME - Name of the domain to be modified.
-   FORMAT      - New format, i.e the print width, for this domain.
-   DEFAULT     - New default value for this domain.
-   DOC         - New description of this domain.  (MODIFY-DOMAIN DOMAIN-NAME &REST KEYWORD-LIST &KEY &OPTIONAL FORMAT DEFAULT DOC &ALLOW-OTHER-KEYS)ÄÄBÄõëBÄ‹¿lÄ~S¿BÄ¿BÄÏ¿BÄ°¿BÄﬂ¿BÄ≠“BÄﬂ“BÄíPA¡Pˇ€PPÅQPÇQPÉQ	PÑQ
-≤@√
-ööAëÅQ@QîOÄ"BÄÄ1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄ\ÄBÄ8\ÄBÄÍÏÅModify DomainÄBÄÏBÄ&BÄÌBÄ&BÄÓ\Ä\ÄBÄBÄêBÄ˛,ÉUsed to modify a domain.BÄÙ\Ä\ÄBÄaBÄ˜¨ÅManipulationBÄª\ÄBÄΩ\ÄÄ*¨ÅDomain Name:BÄ¿BÄ:BÄ¡\ÄBÄ˛lÑName of the domain to be modified.BÄƒ\ÄÄ*ÏÅDefault value:BÄ¿BÄ:BÄ¡\ÄBÄ˛lÑNew default value for this domain.BÄƒ\ÄÄ*ÏÅDocumentation:BÄ¿BÄ:BÄ¡\ÄBÄ˛lÑNew documentation for the domain.ÄBÄ-\ÄÄ*,ÇDefault width :ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛lÜThe new default width to be used for this domain.ÄBÄƒBÄ*lÑGive parameters for MODIFY DOMAIN:BÄ˘BÄ \ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄ)BÄÏBÄ&BÄÌBÄ&BÄÓBÄ*BÄ˛BÄ,BÄÙBÄ-BÄªBÄ0BÄ˘BÄ BÄÃÄ\ÄBÄ^BÄ‡CÇDEFINE-TRANSACTIONÄÎÄ"ÜÄAHFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄH\ÄBÄmBÄŒ√ÄFORMSÄBÄ†BÄûBÄ:\ÄBÄßBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛ÏØDefine a transaction, a list of database calls.
-
-   TRANSACTION - Name of the transaction.
-   FORMS       - List of RTMS calls.
-   DIRECTORY   - Name of the directory in which this transaction will be stored.
-   PATHNAME    - Name of the file in which it will be stored.  (DEFINE-TRANSACTION TRANSACTION FORMS &REST KEYWORD-LIST &KEY &OPTIONAL DIRECTORY PATHNAME &ALLOW-OTHER-KEYS)ÄÄBÄõëBÄ‹¿lÄ~S¿BÄI¿BÄ†¿BÄû¿BÄ≠“BÄﬂ“BÄIíPA¡Pˇ€PPÅQÇQPÉQPÑQ	¢@√	¢
-öAëÅQÇQ@QúOÄXBÄHÄ1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄI\ÄBÄ8\ÄBÄÍlÇDefine TransactionBÄÏBÄ\BÄÌBÄ\BÄÓ\Ä\ÄBÄêBÄBÄ˛ÏÉUsed to define a transaction.ÄBÄÙ\Ä\ÄBÄaBÄ˜lÅDefinitionBÄª\ÄBÄΩ\ÄÄ*lÇTransaction Name:ÄBÄ¿BÄÜBÄ¡\ÄBÄ˛,ÉName of the transaction.BÄƒ\ÄÄ*,ÇDatabase calls:ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛lÉA list of database calls.ÄBÄƒBÄ—\ÄÄ*lÅPathname :BÄ¿BÄñBÄ¡\ÄBÄ˛¨ÖThe default file in which it will be saved.ÄBÄƒBÄ*,ÖGive parameters for DEFINE TRANSACTION:ÄBÄ˘BÄV\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄ_BÄÏBÄ\BÄÌBÄ\BÄÓBÄ`BÄ˛BÄbBÄÙBÄcBÄªBÄfBÄ˘BÄVBÄÃÄ\ÄBÄ^BÄ‡CÇMODIFY-TRANSACTIONÄÎÄ
- ÜÄAFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄz\ÄBÄmBÄŒÄ†BÄûBÄ:\ÄBÄßBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛¨®Edit the database calls in a transaction.
-   TRANSACTION - Name of the transaction.
-   DIRECTORY   - Name of the directory in which this transaction can be found.
-   PATHNAME    - Name of the file in which it is stored.  (MODIFY-TRANSACTION TRANSACTION &REST KEYWORD-LIST &KEY &OPTIONAL DIRECTORY PATHNAME &ALLOW-OTHER-KEYS)ÄBÄõëBÄ‹¿lÄ~S¿BÄ{¿BÄ†¿BÄû¿BÄ≠“BÄﬂ“BÄ{íPA¡Pˇ€PPÅQPÇQPÉQ	¢@√	ö
-öAëÅQ@QîOÄ BÄzÄ1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄ{\ÄBÄ8\ÄBÄÍlÇModify TransactionBÄÏBÄ
-BÄÌBÄ
-BÄÓ\Ä\ÄBÄBÄBÄ˛ÏÉUsed to modify a transaction.ÄBÄÙ\Ä\ÄBÄaBÄ˜¨ÅManipulationBÄª\ÄÄΩ\ÄÄ*lÇTransaction Name:ÄBÄ¿BÄÜBÄ¡\ÄBÄ˛,ÖName of the transaction to be modified.ÄBÄƒ\ÄÄ*lÅDirectory:BÄ¿BÄüBÄ¡\ÄBÄ˛ÏáDefault directory in which it can be found, if not in memory.ÄBÄƒ\ÄÄ*lÅPathname :BÄ¿BÄñBÄ¡\ÄBÄ˛¨áThe default file in which it can be found, if not in memory.BÄƒBÄ*,ÖGive parameters for MODIFY TRANSACTION:ÄBÄ˘BÄá\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄêBÄÏBÄ
-BÄÌBÄ
-BÄÓBÄëBÄ˛BÄìBÄÙBÄîBÄªBÄóBÄ˘BÄáBÄÃÄ\ÄBÄ^BÄ‡ÇDEFINE-DATABASEÄÄÎÄ#ÜÄAHFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ´\ÄBÄmBÄ°BÄ∑BÄ°ÉÄENVÄBÄ:\ÄBÄßBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛¨∞Define a new database.
-
-   DB-NAME     - Name of the database.
-   DIRECTORY   - Name of the directory in which this database is to be saved.
-   ENVIRONMENT - Name of the environment to be associated with this database.
-   DOCUMENTATION - A string describing this database.  (DEFINE-DATABASE DB-NAME &REST KEYWORD-LIST &KEY &OPTIONAL DIRECTORY ENVIRONMENT DOCUMENTATION &ALLOW-OTHER-KEYS)ÄÄBÄõëBÄ‹¿lÄ~S¿√ÄDEFDBÄ¿BÄ†¿BÄ°¿BÄÂ¿BÄ≠“BÄﬂ“BÄªíPA¡Pˇ€PPÅQPÇQPÉQ	PÑQ
-≤@√
-ööAëÅQ@QîOÄºBÄ´Ä1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄ¨\ÄBÄ8\ÄBÄÍ,ÇDefine DatabaseÄBÄÏBÄ¿BÄÌBÄ¿BÄÓ\Ä\ÄBÄêBÄêBÄ˛,ÜUsed to define a database in a given directory.ÄBÄÙ\Ä\ÄBÄaBÄ˜lÅDefinitionBÄª\ÄBÄΩ\ÄÄ*ÏÅDatabase Name:BÄ¿BÄ:BÄ¡\ÄBÄ˛ÏÇName of the database.ÄBÄƒ\ÄÄ*,ÇDirectory Name:ÄBÄ¿BÄüBÄ¡\ÄBÄ˛ÏÖName of the save directory for this database.ÄBÄƒ\ÄÄ*ÏÅDocumentation:BÄ¿BÄ¥BÄ¡\ÄBÄ˛,ÑDocumentation for the database.ÄBÄ-\ÄÄ*¨ÅEnvironment:BÄ¿BÄ:BÄ¡\ÄBÄ˛¨àName of the environment to be used to replace the default settings.ÄBÄƒBÄ*¨ÑGive parameters for DEFINE DATABASE:BÄ˘BÄπ\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄ√BÄÏBÄ¿BÄÌBÄ¿BÄÓBÄƒBÄ˛BÄ∆BÄÙBÄ«BÄªBÄ BÄ˘BÄπBÄÃÄ\ÄBÄ^BÄ‡ÇMODIFY-DATABASEÄÄÎÄ#ÜÄAHFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ‚\ÄBÄmBÄ°ÉÅNEW-DATABASEBÄ∑BÄ°BÄ:\ÄBÄßBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛,±Modify various features of the active database.
-
-  DATABASE      - Name of the database to be modified.
-  DATABASE-NAME - New name for this database.
-  DIRECTORY     - New directory in which this database is to be saved.
-  DOCUMENTATION - New description for this database.  (MODIFY-DATABASE DATABASE &REST KEYWORD-LIST &KEY &OPTIONAL DATABASE-NAME DIRECTORY DOCUMENTATION &ALLOW-OTHER-KEYS)ÄÄBÄõëBÄ‹¿lÄ~S¿BÄ„¿√ÅDATABASE-NAMEÄ¿BÄ†¿BÄ°¿BÄ≠“BÄﬂ“BÄ„íPA¡Pˇ€PPÅQPÇQPÉQ	PÑQ
-≤@√
-ööAëÅQ@QîOÄÛBÄ‚Ä1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄ„\ÄBÄ8\ÄBÄÍ,ÇModify DatabaseÄBÄÏBÄ˜BÄÌBÄ˜BÄÓ\Ä\ÄBÄBÄfBÄ˛,ÖUsed to modify the features a database.ÄBÄÙ\Ä\ÄBÄaBÄ˜¨ÅManipulationBÄª\ÄBÄΩ\ÄÄ*ÏÅDatabase Name:BÄ¿BÄ:BÄ¡\ÄBÄ˛ÏÇName of the database.ÄBÄƒ\ÄÄ*lÇNew Database Name:BÄ¿BÄ:BÄ¡\ÄBÄ˛ÏÜIf the database is to be renamed specify the new name.BÄƒ\ÄÄ*,ÇDirectory Name:ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛, To change the save directory for this database specify a new directory.ÄBÄƒ\ÄÄ*ÏÅDocumentation:BÄ¿BÄ:BÄ¡\ÄBÄ˛¨ÑNew documentation for the database.ÄBÄ-BÄ*¨ÑGive parameters for MODIFY DATABASE:BÄ˘BÄ\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄ˙BÄÏBÄ˜BÄÌBÄ˜BÄÓBÄ˚BÄ˛BÄ˝BÄÙBÄ˛BÄªBÄ	BÄ˘BÄBÄÃÄ\ÄBÄ^BÄ‡ÇMODIFY-ATTRIBUTEÄÎÄ(ÜÄA»FÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ	\ÄBÄmBÄ†BÄ√ÅNEW-ATTRBÄÊBÄ°BÄﬂBÄ:\ÄBÄßBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛ÏøModify various features of an attribute in a given relation.
-
-  RELATION       - Name of the relation in which the attribute to be modified exists.
-  ATTRIBUTE      - Name of the attribute to be modified.
-  ATTRIBUTE-NAME - New name for this attribute.
-  DEFAULT-VALUE  - New default value for this attribute.
-  DOCUMENTATION  - New description.
-  FORMAT         - New print width to be used for this attribute.  (MODIFY-ATTRIBUTE RELATION ATTRIBUTE &REST KEYWORD-LIST &KEY &OPTIONAL ATTRIBUTE-NAME DEFAULT-VALUE DOCUMENTATION FORMAT &ALLOW-OTHER-KEYS)ÄBÄõëBÄ‹¿lÄ~S¿BÄ	¿√ÅATTRIBUTE-NAME¿BÄÊ¿BÄ°¿BÄﬂ¿BÄ≠“BÄﬂ“BÄ	íPA¡Pˇ€PPÅQÇQPÉQPÑQ	PÖQ
-PÜQJ∫@√¢öAëÅQÇQ@QúOÄ*	BÄ	Ä1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄ	\ÄBÄ8\ÄBÄÍ,ÇModify AttributeBÄÏBÄ.	BÄÌBÄ.	BÄÓ\Ä\ÄBÄBÄÚBÄ˛,ÖUsed to modify the features a attribute.BÄÙ\Ä\ÄBÄaBÄ˜¨ÅManipulationBÄª\Ä	BÄΩ\ÄÄ*ÏÅRelation Name:BÄ¿BÄ~BÄ¡\ÄBÄ˛ÏÇName of the relation.ÄBÄƒ\ÄÄ*,ÇAttribute Name:ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛ÏÇName of the attribute.BÄƒ\ÄÄ*¨ÇNew Attribute Name:ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛,áIf the attribute is to be renamed specify the new name.ÄBÄƒ\ÄÄ*ÏÅDefault Value:BÄ¿BÄ:BÄ¡\ÄBÄ˛làTo change the default value of this attribute specify a new value.BÄƒ\ÄÄ*ÏÅDocumentation:BÄ¿BÄ:BÄ¡\ÄBÄ˛¨ÑNew documentation for the attribute.BÄ-\ÄÄ*,ÇDefault width :ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛¨ÜThe new default width to be used for this attribute.BÄƒBÄ*ÏÑGive parameters for MODIFY ATTRIBUTE:ÄBÄ˘BÄ'	\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄ1	BÄÏBÄ.	BÄÌBÄ.	BÄÓBÄ2	BÄ˛BÄ4	BÄÙBÄ5	BÄªBÄ8	BÄ˘BÄ'	BÄÃÄ\ÄBÄ^BÄ‡ÉÅMODIFY-VIEWÄÄÎÄ
- ÜÄAFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄX	\ÄBÄmÉÄVIEWBÄÊBÄ°BÄ:\ÄBÄßBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛¨•Modify a view definition or its documentation.
-
-   VIEW-NAME       - Name of the view.
-   VIEW-DEFINITION - New definition of the view.
-   VIEW-DOCUMENTATION - New description of the view.  (MODIFY-VIEW VIEW-NAME &REST KEYWORD-LIST &KEY &OPTIONAL VIEW-DEFINITION VIEW-DOCUMENTATION &ALLOW-OTHER-KEYS)ÄBÄõëBÄ‹¿lÄ~S¿BÄY	¿ÅVIEW-DEF¿ÅVIEW-DOC¿BÄ≠“BÄﬂ“BÄY	íPA¡Pˇ€PPÅQPÇQPÉQ	¢@√	ö
-öAëÅQ@QîOÄj	BÄX	Ä1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄY	\ÄBÄ8\ÄBÄÍ¨ÅModify ViewÄBÄÏBÄn	BÄÌBÄn	BÄÓ\Ä\ÄBÄ•Ä VBÄ˛¨ÑUsed to modify the features a view.ÄBÄÙ\Ä\ÄBÄaBÄ˜¨ÅManipulationBÄª\ÄÄΩ\ÄÄ*lÅView Name:BÄ¿BÄ:BÄ¡\ÄBÄ˛lÇName of the view.ÄBÄƒ\ÄÄ*,ÇView Definition:BÄ¿BÄ:BÄ¡\ÄBÄ˛¨ÉNew definition of the view.ÄBÄƒ\ÄÄ*ÏÅDocumentation:BÄ¿BÄ:BÄ¡\ÄBÄ˛,ÑNew documentation for the view.ÄBÄ-BÄ*,ÑGive parameters for MODIFY VIEW:BÄ˘BÄf	\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄq	BÄÏBÄn	BÄÌBÄn	BÄÓBÄr	BÄ˛BÄu	BÄÙBÄv	BÄªBÄy	BÄ˘BÄf	BÄÃÄ\ÄBÄ^BÄ‡ÇMODIFY-RELATIONÄÄÎÄ8ÜÄCFÄ&¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ
-	\ÄBÄmÉÄRELÄÅNEW-RELÄÅADD-ATTÄÅDEL-ATTÄÅREN-ATTÄBÄ£BÄ¨BÄﬂBÄ¢BÄ†BÄ°BÄ:\ÄBÄßBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛ÏøÙModify various features of a relation.
-
-  RELATION             - Name of the relation to be modified.
-  RELATION-NAME        - New name for this relation.
-  ADD-ATTRIBUTES       - List of new attributes and their description.
-  DELETE-ATTRIBUTES    - List of attributes to be destroyed.
-  RENAME-ATTRIBUTES    - List of list of OLD-NEW attribute names.
-  IMPLEMENTATION-TYPE  - Name of the new implementation type.
-  STORAGE-STRUCTURE    - Name of the new storage-structure.
-  FORMAT               - List of new print-width values to be used for the attributes.
-  KEY                  - List of attributes to form the new key for this relation.
-  DOCUMENTATION        - New description of this relation.
-  DIRECTORY            - New directory in which this relation is to be saved.  (MODIFY-RELATION RELATION &REST KEYWORD-LIST &KEY &OPTIONAL RELATION-NAME ADD-ATTRIBUTES DELETE-ATTRIBUTES RENAME-ATTRIBUTES IMPLEMENTATION-TYPE STORAGE-STRUCTURE FORMAT KEY DOCUMENTATION DIRECTORY &ALLOW-OTHER-KEYS)ÄÄBÄõëBÄ‹¿lÄ~S¿BÄé	¿BÄ†¿√ÅADD-ATTRIBUTES¿CÇDELETE-ATTRIBUTESÄ¿CÇRENAME-ATTRIBUTESÄ¿BÄ£¿BÄ¨¿BÄﬂ¿BÄ¢¿BÄ°¿BÄ†¿BÄ≠“BÄﬂ“BÄé	íPA¡Pˇ€PPÅQPÇQPÉQ	PÑQ
-PÖQPÜQPáQPàQP QPãQPäQJ∫@√ööAëÅQ@QîOÄ§	BÄ
-	Ä1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄé	\ÄBÄ8\ÄBÄÍ,ÇModify RelationÄBÄÏBÄ®	BÄÌBÄ®	BÄÓ\Ä\ÄBÄBÄBÄ˛,ÖUsed to modify the features a relation.ÄBÄÙ\Ä\ÄBÄaBÄ˜¨ÅManipulationBÄª\ÄBÄΩ\ÄÄ*ÏÅRelation Name:BÄ¿BÄ~BÄ¡\ÄBÄ˛ÏÇName of the Relation.ÄBÄƒ\ÄÄ*lÇNew Relation Name:BÄ¿BÄ:BÄ¡\ÄBÄ˛ÏÜIf the relation is to be renamed specify the new name.BÄƒ\ÄÄ*,ÇAdd attributes:ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛lãSpecify a list of attribute-descriptor pairs for attributes to be added to this relation.ÄBÄƒ\ÄÄ*lÇDelete attributes:BÄ¿BÄ:BÄ¡\ÄBÄ˛ÏàSpecify a list of attributes in this relation which are to be deleted.BÄƒ\ÄÄ*lÇRename attributes:BÄ¿BÄ:BÄ¡\ÄBÄ˛¨ãTo rename some of the attributes provide a list of the form (<old-attribute new-attribute>).BÄƒ\ÄÄ*¨ÇImplementation Type:BÄ¿BÄ:BÄ¡\ÄBÄ˛, To change the implementation type of this relation specify a new value.ÄBÄƒ\ÄÄ*lÇStorage structure:BÄ¿BÄ:BÄ¡\ÄBÄ˛ÏàTo change the storage structure of this relation specify a new value.ÄBÄƒ\ÄÄ*,ÅFormat:ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛,äTo change the format for this relation specify a new format as a list of values.BÄƒ\ÄÄ*¨ÄKey:BÄ¿BÄ:BÄ¡\ÄBÄ˛Ï To change the key for this relation specify a new key as a list of attributes.BÄƒ\ÄÄ*,ÇDirectory Name:ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛, To change the save directory for this relation specify a new directory.ÄBÄƒ\ÄÄ*ÏÅDocumentation:BÄ¿BÄ:BÄ¡\ÄBÄ˛¨ÑNew documentation for the relation.ÄBÄ-BÄ*¨ÑGive parameters for MODIFY RELATION:BÄ˘BÄü	\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄ´	BÄÏBÄ®	BÄÌBÄ®	BÄÓBÄ¨	BÄ˛BÄÆ	BÄÙBÄØ	BÄªBÄ≤	BÄ˘BÄü	BÄÃÄ\ÄBÄ^BÄ‡CÇDEFINE-ENVIRONMENTÄÎÄRÜÄCHFÄ4¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄÊ	\ÄBÄmBÄÂBÄòÄ†ÉÄERRÄCÅPAR-CHECKÄÅREL-IMPÄÅREL-STOÄ√ÄSTATUSÅSYS-IMPÄÅSYS-STOÄCÅVAL-CHECKÄ™ÄWARNBÄ:\ÄBÄßBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛Ïø∂Global variables defining an environment can be set using this function.
-
-   ENVIRONMENT  - Name of the environment.
-   AUTO-SAVE    - If T, RTMS saves the database whenever a relation is modified.
-   DIRECTORY    - Name of the default directory in which the database is to be saved.
-   ERRORS       - If T, error messages are generated.
-   PARAMETER-CHECKING - If T, extensive parameter validity checking is done.
-   RELATION-IMPLEMENTATION - The default implementation type for the user relations.
-   RELATION-STORAGE-STRUCTURE -The default storage structure type for the user relations.
-   STATUS       - If T, status messages are generated.
-   SYSTEM-IMPLEMENTATION - If there is no active database, this value will be used as the implementation
-                           type for implementing system-relations.
-   SYSTEM-STORAGE-STRUCTURE - If there is no active database, this value will be used as the storage structure
-                              for implementing system-relations.
-   VALIDITY     - If T, extensive validity checking is done for user-supplied data.
-   WARNINGS     - If T, warning messages are generated.  (DEFINE-ENVIRONMENT ENVIRONMENT &REST KEYWORD-LIST &KEY &OPTIONAL AUTO-SAVE DIRECTORY ERRORS PARAMETER-CHECKING RELATION-IMPLEMENTATION RELATION-STORAGE-STRUCTURE STATUS SYSTEM-IMPLEMENTATION SYSTEM-STORAGE-STRUCTURE VALIDITY WARNINGS &ALLOW-OTHER-KEYS)ÄBÄõ—BÄõëBÄ‹¿lÄ~S¿√ÄDEFENV¿CÅAUTO-SAVEÄ¿ÉÄPARA¿BÄ†¿BÄÚ	¿BÄÛ	¿√ÄERRORS¿BÄÙ	¿ÅVALIDITY¿ÅWARNINGS¿BÄı	¿BÄˆ	¿BÄ≠“BÄﬂ“BÄ˛	íPA¡Pˇ€PPÅQ‰PÇQ	PÖQ
-PÉQPÜQPáQPÑQPàQPãQPåQJ¸PÇQ	PÖQ
-PÉQPÜQPáQPÑQPàQP QPäQPãQPåQJ∫@√ööAëÅQ@QîOÄ
-BÄÊ	Ä1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄÁ	\ÄBÄ8\ÄBÄÍlÇDefine EnvironmentBÄÏBÄ
-BÄÌBÄ
-BÄÓ\Ä\ÄBÄêBÄeBÄ˛¨ÜUsed to define an environment in a given directory.ÄBÄÙ\Ä\ÄBÄaBÄ˜lÅDefinitionBÄª\ÄBÄΩ\ÄÄ*lÇEnvironment Name:ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛,ÉName of the environment.BÄƒ\ÄÄ*lÅAuto save:BÄ¿BÄ:BÄ¡\ÄBÄ˛¨àAutomatically saves all the modified relations after each function.ÄBÄ¶BÄ—\ÄÄ*,ÅErrors:ÄBÄ¿BÄÃBÄ¡\ÄBÄ˛¨ÖControls the printing of the error messages.BÄ¶\ÄÄ*¨ÇParameter Checking:ÄBÄ¿BÄÃBÄ¡\ÄBÄ˛,ÖControls the checking of the parameters.BÄ¶\ÄÄ*,ÉRelation Implementation:BÄ¿BÄΩBÄ¡\ÄBÄ˛ÏÖDefault implementation of the user relations.ÄBÄƒ\ÄÄ*¨ÉRelation storage structure:ÄBÄ¿BÄ¬BÄ¡\ÄBÄ˛lÜDefault storage structure for the user relations.ÄBÄƒ\ÄÄ*,ÅStatus:ÄBÄ¿BÄÃBÄ¡\ÄBÄ˛ÏÖControls the printing of the status messages.ÄBÄ¶\ÄÄ*ÏÇSystem Implementation:BÄ¿BÄ:BÄ¡\ÄBÄ˛ÏãDefault implementation of the system relations. Can not change this when a database is active.BÄƒ\ÄÄ*lÉSystem storage structure:ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛låDefault storage structure for the system relations. Can not change this when a database is active.BÄƒ\ÄÄ*lÇValidity Checking:BÄ¿BÄÃBÄ¡\ÄBÄ˛¨äControls the checking of the values during insertion and modification for validity.ÄBÄ¶\ÄÄ*lÅWarnings:ÄBÄ¿BÄÃBÄ¡\ÄBÄ˛ÏÖControls the printing of the warning messages.BÄ¶BÄ*,ÖGive parameters for DEFINE ENVIRONMENT:ÄBÄ˘BÄ¸	\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄ
-BÄÏBÄ
-BÄÌBÄ
-BÄÓBÄ
-BÄ˛BÄ
-BÄÙBÄ
-BÄªBÄ
-BÄ˘BÄ¸	BÄÃÄ\ÄBÄ^BÄ‡ÇDEFINE-RELATIONÄÄÎÄ.ÜÄBHFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄF
-\Ä	BÄmBÄ†ÅATTR-DESBÄüBÄ†BÄ°BÄ¢BÄ£BÄ§BÄ:\ÄBÄßBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛ÏøäDefine relations in the active database.
-
-   RELATION-NAME - Name of the relation to be defined.
-   ATTRIBUTE-DESCRIPTOR - List of attributes and their descriptions.
-   DIRECTORY     - Name of the directory in which this relation is to be saved.
-   DOCUMENTATION - Description of this relation.
-   FORMAT        - List of print-width values correponding to the attribute-list.
-   IMPLEMENTATION-TYPE - Name of the implementation for this relation.
-   KEY           - List of attributes comprising the key for this relation.
-   STORAGE-STRUCTURE   - Name of the storage structure to be used for this relation.  (DEFINE-RELATION RELATION-NAME ATTRIBUTE-DESCRIPTOR &REST KEYWORD-LIST &KEY &OPTIONAL DIRECTORY DOCUMENTATION FORMAT IMPLEMENTATION-TYPE KEY STORAGE-STRUCTURE &ALLOW-OTHER-KEYS)ÄÄBÄõëBÄ‹¿lÄ~S¿√ÄDEFREL¿ÉÅTUPLE-FORMAT¿BÄ†¿BÄ°¿BÄ¢¿BÄ£¿BÄ¨¿BÄ≠“BÄﬂ“BÄV
-íPA¡Pˇ€PPÅQÇQPÉQPÑQ	PÖQ
-PÜQPáQPàQJ∫@√¢öAëÅQÇQ@QúOÄX
-BÄF
-Ä1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄG
-\ÄBÄ8\ÄBÄÍ,ÇDefine RelationÄBÄÏBÄ\
-BÄÌBÄ\
-BÄÓ\Ä\ÄBÄêBÄBÄ˛lÉused to define a relation.BÄÙ\Ä\ÄBÄaBÄ˜lÅDefinitionBÄª\ÄBÄΩ\ÄÄ*ÏÅRelation Name:BÄ¿BÄ:BÄ¡\ÄBÄ˛¨ÑName of the relation to be defined.ÄBÄƒBÄ≈BÄÕBÄ—BÄ’BÄ⁄BÄﬁBÄ‚BÄ*¨ÑGive parameters for DEFINE RELATION:BÄ˘BÄT
-\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄ_
-BÄÏBÄ\
-BÄÌBÄ\
-BÄÓBÄ`
-BÄ˛BÄb
-BÄÙBÄc
-BÄªBÄf
-BÄ˘BÄT
-BÄÃÄ\ÄBÄ^BÄ‡ÉÅDEFINE-VIEWÄÄÎÄ
-ÜÄA
-FÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄr
-\ÄBÄmÅVIEWNAMEÇVIEW-DEFINITIONÄBÄ°BÄ:BÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛lûDefine views on the relations.
-
-   VIEW-NAME - Name of the view.
-   VIEW-DEF  - Definition of the view.
-   DOCUMENTATION - Describes the view.  (DEFINE-VIEW VIEWNAME VIEW-DEF &REST KEYWORD-LIST &KEY &OPTIONAL DOCUMENTATION &ALLOW-OTHER-KEYS)ÄÄBÄõëBÄ‹¿lÄ~S¿ÅDEFVIEWÄ¿BÄ≠“BÄﬂ“BÄÇ
-íP@¡Pˇ€PPÅQÇQÉQ¢ö@ëÅQÇQÉQ	úOÄÉ
-BÄr
-Ä1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄs
-\ÄBÄ8\ÄBÄÍ¨ÅDefine ViewÄBÄÏBÄá
-BÄÌBÄá
-BÄÓ\Ä\ÄBÄêBÄt	BÄ˛ÏÇUsed to define a view.BÄÙ\Ä\ÄBÄaBÄ˜lÅDefinitionBÄª\ÄÄΩ\ÄÄ*lÅView Name:BÄ¿BÄ:BÄ¡\ÄBÄ˛¨ÉSpecify a name for the view.BÄƒ\ÄÄ*,ÇView Definition:BÄ¿BÄ«BÄ¡\ÄBÄ˛lÑSpecify a definition for the view.BÄƒ\ÄÄ*¨ÇView Documentation:ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛¨ÑSpecify documentation for the view.ÄBÄƒBÄ*,ÑGive parameters for DEFINE VIEW:BÄ˘BÄÄ
-\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄä
-BÄÏBÄá
-BÄÌBÄá
-BÄÓBÄã
-BÄ˛BÄ
-
-BÄÙBÄé
-BÄªBÄë
-BÄ˘BÄÄ
-BÄÃÄ\ÄBÄ^BÄ‡ÇDEFINE-ATTRIBUTEÄÎÄ
-ÜÄAFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ•
-\ÄBÄmBÄ∏BÄP
-BÄ¢BÄ:\ÄBÄßBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛Ï¥Add a new attribute to a relation.
-    All its tuples will get the default value of the attribute for the attribute value.
-
-   RELATION-NAME - Name of the relation.
-   ATTRIBUTE-DESCRIPTOR - List of attributes and their descriptions.
-   KEY           - If the key for this relation is to be changed, specify it.  (DEFINE-ATTRIBUTE RELATION-NAME ATTRIBUTE-DESCRIPTOR &REST KEYWORD-LIST &KEY &OPTIONAL KEY &ALLOW-OTHER-KEYS)ÄBÄõëBÄ‹¿lÄ~S¿BÄ¶
-¿BÄ¢¿BÄ≠“BÄﬂ“BÄ¶
-íPA¡Pˇ€PPÅQÇQPÉQí@√¢	öAëÅQÇQ@Q
-úOÄ¥
-BÄ•
-Ä1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄ¶
-\ÄBÄ8\ÄBÄÍ,ÇDefine AttributeBÄÏBÄ∏
-BÄÌBÄ∏
-BÄÓ\Ä\ÄBÄêBÄÚBÄ˛¨ÑUsed to add attributes to relations.BÄÙ\Ä\ÄBÄaBÄ˜lÅDefinitionBÄª\ÄÄΩ\ÄÄ*,ÇRelation name: ÄBÄ¿BÄ~BÄ¡\ÄBÄ˛làThe name of the relation to which new attributes are to be added.ÄBÄƒBÄ≈\ÄÄ*ÏÄKey: ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛,
-New key for the relation if it is to be different from the previous value. Specify a list of attributes.BÄƒBÄ*ÏÑGive parameters for DEFINE ATTRIBUTE:ÄBÄ˘BÄ≤
-\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄª
-BÄÏBÄ∏
-BÄÌBÄ∏
-BÄÓBÄº
-BÄ˛BÄæ
-BÄÙBÄø
-BÄªBÄ¬
-BÄ˘BÄ≤
-BÄÃÄ\ÄBÄ^BÄ‡√ÅMODIFY-TUPLESÄÄÎÄ#ÜÄAHFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ“
-\ÄBÄmBÄ†ÉÅWHERE-CLAUSEBÄ∫ÍÄVALUESBÄ:\ÄBÄßBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛l∑The values of the tuples in a relation can be modified using this function.
-
-   RELATION  - Name of the relation whose tuples are to be modified.
-   ATTRIBUTE - List of attributes which are to be modified.
-   VALUE     - Corresponding list of values to be used in modifying the above attributes.
-   WHERE     - Selection criterion to be used.  (MODIFY-TUPLES RELATION &REST KEYWORD-LIST &KEY &OPTIONAL ATTRIBUTE VALUE WHERE &ALLOW-OTHER-KEYS)ÄBÄõëBÄ‹¿lÄ~S¿√ÄMODIFY¿√ÄWHEREÄ¿BÄ√¿BÄ›
-¿BÄ≠“BÄﬂ“BÄ„
-íPA¡Pˇ€PPÅQPÇQPÉQ	PÑQ
-≤@√
-ööAëÅQ@QîOÄÂ
-BÄ“
-Ä1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄ”
-\ÄBÄ8\ÄBÄÍÏÅModify TuplesÄBÄÏBÄÈ
-BÄÌBÄÈ
-BÄÓ\Ä\ÄBÄ•Ä@MBÄ˛¨ÑUsed to modify tuples in a relation.BÄÙ\Ä\ÄBÄaBÄ˜¨ÅManipulationBÄª\ÄBÄΩ\ÄÄ*lÅRelation: BÄ¿BÄ~BÄ¡\ÄBÄ˛ÏÜSpecify the relation whose tuples are to be modified.ÄBÄƒ\ÄÄ*ÏÅWhere clause: BÄ¿BÄÀBÄ¡\ÄBÄ˛ÏÉProvide a selection criteria.ÄBÄƒ\ÄÄ*¨ÅAttributes: BÄ¿BÄéBÄ¡\ÄBÄ˛làSpecify a list of attributes in the above relation to be modified.BÄƒ\ÄÄ*,ÅValues: BÄ¿BÄ–BÄ¡\ÄBÄ˛ÏàSpecify a corresponding list of values to modify the above attributes.BÄƒBÄ*ÏÑGive parameters for MODIFY TUPLES ==>ÄBÄ˘BÄ·
-\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄÏ
-BÄÏBÄÈ
-BÄÌBÄÈ
-BÄÓBÄÌ
-BÄ˛BÄ
-BÄÙBÄÒ
-BÄªBÄÙ
-BÄ˘BÄ·
-BÄÃÄ\ÄBÄ^BÄ‡√ÅDELETE-TUPLESÄÄÎÄ	ÜÄ@ƒFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ\ÄBÄmBÄ†BÄ‹
-BÄ:BÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛Ï£Deletes the tuples which satisfy the WHERE clause from the specified relation.
-
-   RELATION - Name of the relation from which the tuples are to be deleted.
-   WHERE    - Selection criterion to be used.  (DELETE-TUPLES RELATION &REST KEYWORD-LIST &KEY &OPTIONAL WHERE &ALLOW-OTHER-KEYS)ÄÄBÄõëBÄ‹¿lÄ~S¿BÄ¿BÄ‰
-¿BÄ≠“BÄﬂ“BÄíP@¡Pˇ€PPÅQPÇQíö	ö@ëÅQPÇQí
-îOÄBÄÄ1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄ\ÄBÄ8\ÄBÄÍÏÅDelete TuplesÄBÄÏBÄBÄÌBÄBÄÓ\ÄBÄfBÄ˛¨ÑUsed to delete tuples in a relation.BÄÙ\Ä\ÄBÄaBÄ˜¨ÅManipulationBÄª\ÄBÄΩ\ÄÄ*lÅRelation: BÄ¿BÄ~BÄ¡\ÄBÄ˛lÜSpecify a relation whose tuples are to be deleted.BÄƒ\ÄÄ*ÏÅWhere clause: BÄ¿BÄ:BÄ¡\ÄBÄ˛,ÜDeletes the tuples which satisfy this condition.BÄƒBÄ*ÏÑGive parameters for DELETE TUPLES ==>ÄBÄ˘BÄ\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄ!BÄÏBÄBÄÌBÄBÄÓBÄ"BÄ˛BÄ#BÄÙBÄ$BÄªBÄ'BÄ˘BÄBÄÃÄ\ÄBÄ^BÄ‡ÇRETRIEVE-TUPLESÄÄÎÄ]ÜÄ‡FÄ>¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ7\ÄBÄmBÄ†BÄ∫BÄ‹
-BÄNBÄ†BÄ°BÄ¢BÄ£BÄ¨BÄOBÄPBÄQBÄﬂBÄRBÄSBÄTBÄ¬BÄUBÄVBÄWBÄ.BÄ:\ÄBÄßBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛ÏøORetrieve some tuples from a relation satisying a where clause.
-
-   RELATION-NAME        - Name of the relation whose tuples are to be retrieved.
-   WHERE                - Criterion to be used in selecting the tuples.
-   PROJECT              - List of attributes to be projected in the result.
-   INTO                 - If the result is to be inserted in a relation, specify the name of that relation.
-                          If the above relation is not defined, RTMS defines it with the following keywords.
-   DIRECTORY            - Save directory for this relation.
-   DOCUMENTATION        - Documentation for this relation.
-   FORMAT               - List of print widths for the attributes in this relation.
-   IMPLEMENTATION-TYPE  - Name of the implementation type to be used.
-   INDEX-NAME           - Name of the index to use in the retrieval.
-   KEY                  - List of the resultant attributes to form the key for this relation.
-   STORAGE-STRUCTURE    - Name of the storage-structure.
-   WIDE                 - If T, result is printed out in Attribute: value format rather than as a table.
-   NUMBER               - If WIDE is T, this keyword specifies the number of attributes per line.
-   OUTPUT               - If the result is to be sent to a file, specify the file-name.
-   PRINT                - If NIL, the result is not printed.
-   QPRINT               - If T, the result is printed without formatting.
-   QUICK-SORT           - Specifies the attributes to sort the result on.
-   SORT                 - If any domain-specific, user-defined sort mechanism is to be used, this keyword
-                          can be used.
-   STREAM               - Specify the window to which the output is to be sent, if it is different than the
-                          the *standard-output* or RTMS-interface.
-   TUPLES               - If T, the resultant tuples are returned.
-   UNIQUE               - If T, only unique tuples are retrieved.   (RETRIEVE RELATION-NAME &REST KEYWORD-LIST &KEY &OPTIONAL DIRECTORY DOCUMENTATION FORMAT IMPLEMENTATION-TYPE INDEX-NAME INTO KEY NUMBER OUTPUT PRINT PROJECT QPRINT QUICK-SORT SORT STREAM STORAGE-STRUCTURE TUPLES UNIQUE WHERE WIDE &ALLOW-OTHER-KEYS)¿ÜÄÀÄBÄõëBÄ‹¿lÄ~S¿BÄ®¿ÅPROJECTÄ¿BÄ‰
-¿BÄN¿BÄ†¿BÄ°¿BÄ¢¿BÄ£¿BÄ¨¿BÄO¿BÄ^¿BÄQ¿BÄﬂ¿BÄR¿BÄ_¿BÄT¿BÄ¬¿BÄ`¿BÄV¿BÄW¿BÄ.¿BÄ≠“BÄﬂ“BÄ®íPA¡Pˇ€PPÅQPÇQ±‰ˇ€¸ÇQ	PÉQ
-PÑQPÖQPÜQPáQPàQP QPä?BPãQPåQP
-QPéQPèQPêQPëQPíQPìQPîQPïQ(J∫@√ööAëÅQ@QîOÄHBÄ7Ä1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄ8\ÄBÄ8\ÄBÄÍ,ÇRetrieve TuplesÄBÄÏBÄLBÄÌBÄLBÄÓ\Ä•Ä@RBÄ˛ÏÑUsed to Retrieve tuples in a relation.BÄÙ\Ä\ÄBÄaBÄ˜lÅOperatorsÄBÄª\ÄBÄΩBÄq\ÄÄ*¨ÅAttributes: BÄ¿BÄ:BÄ¡\ÄBÄ˛ÏáProvide a list of attributes. If not all attributes all used.ÄBÄƒBÄ˘
-BÄuBÄ—BÄyBÄ⁄BÄﬁBÄ‚BÄ}BÄÅBÄÖBÄÕBÄ BÄ
-BÄíBÄñBÄöBÄûBÄ¢\ÄÄ*¨ÅIndex-name:ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛làIf the data is to come from an index instead of the base relation.BÄƒBÄ*,ÖGive parameters for RETRIEVE TUPLES ==>ÄBÄ˘BÄD\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄOBÄÏBÄLBÄÌBÄLBÄÓBÄPBÄ˛BÄRBÄÙBÄSBÄªBÄVBÄ˘BÄDBÄÃÄ\ÄBÄ^BÄ‡p¿BÄuÏÄSELECTÄÎÄ ZÜÄ‡ FÄ=¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄf\ÄBÄmBÄ†BÄ‹
-BÄNBÄ†BÄ°BÄ¢BÄ£BÄ¨BÄOBÄPBÄQBÄﬂBÄRBÄSBÄTBÄ¬BÄUBÄVBÄWBÄ.BÄ:\ÄBÄßBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛Ïø˝Same as Retrieve except that all attributes are retrieved.
-
-   RELATION-NAME        - Name of the relation whose tuples are to be retrieved.
-   WHERE                - Criterion to be used in selecting the tuples.
-   INTO                 - If the result is to be inserted in a relation, specify the name of that relation.
-                          If the above relation is not defined, RTMS defines it with the following keywords.
-   DIRECTORY            - Save directory for this relation.
-   DOCUMENTATION        - Documentation for this relation.
-   FORMAT               - List of print widths for the attributes in this relation.
-   IMPLEMENTATION-TYPE  - Name of the implementation type to be used.
-   KEY                  - List of the resultant attributes to form the key for this relation.
-   STORAGE-STRUCTURE    - Name of the storage-structure.
-   WIDE                 - If T, result is printed out in Attribute: value format rather than as a table.
-   NUMBER               - If WIDE is T, this keyword specifies the number of attributes per line.
-   OUTPUT               - If the result is to be sent to a file, specify the file-name.
-   PRINT                - If NIL, the result is not printed.
-   QPRINT               - If T, the result is printed without formatting.
-   QUICK-SORT           - Specifies the attributes to sort the result on.
-   SORT                 - If any domain-specific, user-defined sort mechanism is to be used, this keyword
-                          can be used.
-   STREAM               - Specify the window to which the output is to be sent, if it is different than the
-                          the *standard-output* or RTMS-interface.
-   TUPLES               - If T, the resultant tuples are returned.
-   UNIQUE               - If T, only unique tuples are retrieved.  (SELECT-TUPLES RELATION-NAME &REST KEYWORD-LIST &KEY &OPTIONAL DIRECTORY DOCUMENTATION FORMAT IMPLEMENTATION-TYPE INTO KEY NUMBER OUTPUT PRINT QPRINT QUICK-SORT SORT STREAM STORAGE-STRUCTURE TUPLES UNIQUE WHERE WIDE &ALLOW-OTHER-KEYS)¿ÜÄÇ™ÄBÄõëBÄ‹¿lÄ~S¿√ÅSELECT-TUPLESÄ¿BÄ‰
-¿BÄN¿BÄ†¿BÄ°¿BÄ¢¿BÄ£¿BÄ¨¿BÄO¿BÄ^¿BÄQ¿BÄﬂ¿BÄR¿BÄ_¿BÄT¿BÄ¬¿BÄ`¿BÄV¿BÄW¿BÄ.¿BÄ≠“BÄﬂ“BÄG¿BÄ“BÄ®íPA¡Pˇ€PPÅQPÇQ	PÉQ
-PÑQPÖQPÜQPáQPàQP ?BPäQPãQPåQP
-QPéQPèQPêQPëQPíQPìQPîQ&J∫@√ööAëÅQPˇ€@QöîOÄxBÄfÄ1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄh\ÄBÄ8\ÄBÄÍÏÄSelectBÄÏBÄ|BÄÌBÄ|BÄÓ\Ä\ÄBÄBÄLÄ˛¨ÑUsed to Select tuples in a relation.BÄÙ\Ä\ÄBÄaBÄ˜lÅOperatorsÄBÄª\ÄBÄΩBÄqBÄ˘
-BÄuBÄ—BÄyBÄ⁄BÄﬁBÄ‚BÄ}BÄÅBÄÖBÄÕBÄ BÄ
-BÄíBÄñBÄöBÄûBÄ¢BÄ[BÄ*ÏÑGive parameters for SELECT TUPLES ==>ÄBÄ˘BÄt\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄBÄÏBÄ|BÄÌBÄ|BÄÓBÄÄBÄ˛BÄÇBÄÙBÄÉBÄªBÄÜBÄ˘BÄtBÄÃÄ\ÄBÄ^BÄ‡BÄGÄÎÄ\ÜÄ‡FÄ=¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄé\ÄBÄmBÄ†BÄ∫BÄNBÄ†BÄ°BÄ¢BÄ£BÄ¨BÄOBÄPBÄQBÄﬂBÄRBÄSBÄTBÄ¬BÄUBÄVBÄWBÄ:\ÄBÄßBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛Ïø#Same as Retrieve except that all tuples are retrieved.
-
-   RELATION-NAME        - Name of the relation whose tuples are to be retrieved.
-   PROJECT              - List of attributes to be projected in the result.
-   INTO                 - If the result is to be inserted in a relation, specify the name of that relation.
-                          If the above relation is not defined, RTMS defines it with the following keywords.
-   DIRECTORY            - Save directory for this relation.
-   DOCUMENTATION        - Documentation for this relation.
-   FORMAT               - List of print widths for the attributes in this relation.
-   IMPLEMENTATION-TYPE  - Name of the implementation type to be used.
-   INDEX-NAME           - Name of the index to use in the retrieval.
-   KEY                  - List of the resultant attributes to form the key for this relation.
-   STORAGE-STRUCTURE    - Name of the storage-structure.
-   WIDE                 - If T, result is printed out in Attribute: value format rather than as a table.
-   NUMBER               - If WIDE is T, this keyword specifies the number of attributes per line.
-   OUTPUT               - If the result is to be sent to a file, specify the file-name.
-   PRINT                - If NIL, the result is not printed.
-   QPRINT               - If T, the result is printed without formatting.
-   QUICK-SORT           - Specifies the attributes to sort the result on.
-   SORT                 - If any domain-specific, user-defined sort mechanism is to be used, this keyword
-                          can be used.
-   STREAM               - Specify the window to which the output is to be sent, if it is different than the
-                          the *standard-output* or RTMS-interface.
-   TUPLES               - If T, the resultant tuples are returned.
-   UNIQUE               - If T, only unique tuples are retrieved.  (PROJECT RELATION-NAME &REST KEYWORD-LIST &KEY &OPTIONAL DIRECTORY DOCUMENTATION FORMAT IMPLEMENTATION-TYPE INDEX-NAME INTO KEY NUMBER OUTPUT PRINT PROJECT QPRINT QUICK-SORT SORT STREAM STORAGE-STRUCTURE TUPLES UNIQUE WIDE &ALLOW-OTHER-KEYS)¿ÜÄäÄBÄõëBÄ‹¿lÄ~S¿BÄG¿BÄN¿BÄ†¿BÄ°¿BÄ¢¿BÄ£¿BÄ¨¿BÄO¿BÄ^¿BÄQ¿BÄﬂ¿BÄR¿BÄ_¿BÄT¿BÄ¬¿BÄ`¿BÄV¿BÄW¿BÄ≠“BÄﬂ“BÄ‰
-¿BÄ“BÄ®íPA¡Pˇ€PPÅQPÇQ±‰ˇ€¸ÇQPÉQ	PÑQ
-PÖQPÜQPáQPàQP ?BPäQPãQPåQP
-QPéQPèQPêQPëQPíQPìQ$J∫@√ööAëÅQPˇ›@QöîOÄùBÄéÄ1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄG\ÄBÄ8\ÄBÄÍ,ÅProjectÄBÄÏBÄ°BÄÌBÄ°BÄÓ\Ä\ÄBÄBÄkBÄ˛ÏÑUsed to Project tuples in a relation.ÄBÄÙ\Ä\ÄBÄaBÄ˜lÅOperatorsÄBÄª\ÄBÄΩBÄqBÄWBÄuBÄ—BÄyBÄ⁄BÄﬁBÄ‚BÄ}BÄÅBÄÖBÄÕBÄ BÄ
-BÄíBÄñBÄöBÄûBÄ¢BÄ*ÏÑGive parameters for PROJECT TUPLES ==>BÄ˘BÄö\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄ§BÄÏBÄ°BÄÌBÄ°BÄÓBÄ•BÄ˛BÄßBÄÙBÄ®BÄªBÄ´BÄ˘BÄöBÄÃÄ\ÄBÄ^BÄ‡CÇCOMMIT-TRANSACTIONÄÎÄ
- ÜÄAFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ≥\ÄBÄm√ÄTRANSÄBÄ†BÄûBÄ:\ÄBÄßBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛¨≠Execute the database calls in a transaction.
-
-   TRANSACTION - Name of the transaction to be commited.
-   DIRECTORY   - Name of the directory in which this transaction can be found, if not in memory.
-   PATHNAME    - Name of the file in which it can be found.  (COMMIT-TRANSACTION TRANSACTION &REST KEYWORD-LIST &KEY &OPTIONAL DIRECTORY PATHNAME &ALLOW-OTHER-KEYS)ÄBÄõëBÄ‹¿lÄ~S¿BÄ¥¿BÄ†¿BÄû¿BÄ≠“BÄﬂ“BÄ¥íPA¡Pˇ€PPÅQPÇQPÉQ	¢@√	ö
-öAëÅQ@QîOÄ√BÄ≥Ä1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄ¥\ÄBÄ8\ÄBÄÍlÇCommit TransactionBÄÏBÄ«BÄÌBÄ«BÄÓ\Ä\ÄBÄ•Ä CBÄ˛¨áCommit a transaction - execute all the database calls in it.BÄÙ\Ä\ÄBÄaBÄ˜lÅOperatorsÄBÄª\ÄÄΩ\ÄÄ*lÉName of the transaction :ÄBÄ¿BÄÜBÄ¡\ÄBÄ˛¨ÑThe name of an existing transaction.BÄƒ\ÄÄ*ÏÇName of the directory:BÄ¿BÄüBÄ¡\ÄBÄ˛¨åName of the directory which contains the transaction file, if the transaction is not in the memory.ÄBÄƒ\ÄÄ*lÅPathname:ÄBÄ¿BÄñBÄ¡\ÄBÄ˛ÏéIf the transaction is not in memory, provide the pathname for the transaction file. It defaults to <transaction>.lisp.BÄƒBÄ*ÏÑGive parameters for COMMIT TRANSACTIONBÄ˘BÄ¡\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄ BÄÏBÄ«BÄÌBÄ«BÄÓBÄÀBÄ˛BÄŒBÄÙBÄœBÄªBÄ“BÄ˘BÄ¡BÄÃÄ\ÄBÄ^BÄ‡ÉÄJOINÄÎÄDÜÄCàFÄ.¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄÊ\ÄBÄmBÄNÉÄFROMBÄGBÄ‰
-BÄ¬BÄﬂBÄ†BÄ°BÄ¢BÄ£BÄ¨BÄTBÄWBÄ:\ÄBÄßBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛Ïø3This function provides the capability to combine two relations into a new relation
-   in which the tuples which are to participate in the operation are selected
-   by a where clause.
-
-   FROM                 - A list consisting of the relations to be joined.
-   PROJECT              - This clause specifies the attributes that are to be in the resultant relation
-                          and their associated names in that new relation. It should be of the form
-                          (<[relation-name.]attribute-name>). The optional part relation-name can be
-                          skipped if the attribute is unique in one of the two relations being joined.
-                          If the keyword FROM is not specified, this clause should contain the names
-                          of the relations to be joined. Also, if * is given instead of the attribute-name
-                          it indicates that RTMS should use all the attributes in that relation.
-   WHERE                - Can be used to perform theta-joins. It is a condition used in joining the relations.
-   INTO                 - If the result is to be inserted in a relation, specify the name of that relation.
-                          If the above relation is not defined, RTMS defines it with the following keywords.
-   DIRECTORY            - Save directory for this relation.
-   DOCUMENTATION        - Documentation for this relation.
-   FORMAT               - List of print widths for the attributes in this relation.
-   IMPLEMENTATION-TYPE  - Name of the implementation type to be used.
-   KEY                  - List of the resultant attributes to form the key for this relation.
-   STORAGE-STRUCTURE    - Name of the storage-structure.
-   PRINT                - If NIL, the resultant relation will not be printed out.
-   TUPLES               - If T, the resultant tuples will be returned.
-   UNIQUE               - If T, only unique tuples will be part of the resultant relation.  (JOIN &REST KEYWORD-LIST &KEY FROM &KEY &OPTIONAL PROJECT WHERE INTO DIRECTORY DOCUMENTATION FORMAT IMPLEMENTATION-TYPE KEY STORAGE-STRUCTURE PRINT TUPLES UNIQUE &ALLOW-OTHER-KEYS)ÄÄBÄõëBÄ‹¿lÄ~S¿BÄÁ¿BÄ¿BÄG¿BÄN¿BÄ¬¿BÄﬂ¿BÄ†¿BÄ°¿BÄ¢¿BÄ£¿BÄ¨¿BÄT¿BÄ‰
-¿BÄW¿BÄ≠“BÄﬂ“BÄ“√ÅJOIN-INTERNALÄíPA¡Pˇ€PPPÇQPÉQ	PÅQ
-PÖQPÜQPáQPàQP QPäQPãQPåQPÑQP
-QJ∫@√¢öAëPÇQ@QöåOÄ˜BÄÊÄ1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄÁ\ÄBÄ8\ÄBÄÍ¨ÄJoinBÄÏBÄ˚BÄÌBÄ˚BÄÓ\Ä•Ä JBÄ˛,ÉUsed to join relations.ÄBÄÙ\Ä\ÄBÄaBÄ˜lÅOperatorsÄBÄª\ÄBÄΩ\ÄÄ*lÇOutput relation :ÄBÄ¿BÄ‘BÄ¡\ÄBÄ˛ÏéIf not provided, the result of JOIN is stored in a temporary relation unless only the resultant tuples are requested.ÄBÄƒ\ÄÄ*ÏÄFROM :BÄ¿BÄ‡BÄ¡\ÄBÄ˛ÏÖSpecify a list of two relations to be joined.ÄBÄƒ\ÄÄ*lÅProject :ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛,ñThis gives the attributes in the output relation. Example: (rel1.* a3 (rel2.a1 a4)) ==> All the attributes in rel1, attribute A3 of rel2 and atribute A1 of rel2 renamed as A4.ÄBÄƒ\ÄÄ*,ÅWhere :ÄBÄ¿BÄÿBÄ¡\ÄBÄ˛lèThe join clause using the theta-operators. It is a where clause consisting of attributes from the relations being joined.ÄBÄƒ\ÄÄ*,ÅTuples?ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛,ëSpecify if the resultant tuples be returned rather than inserted in a relation. The following parameters can be ignored if this is true.BÄ¶BÄÕBÄ—BÄyBÄ⁄BÄﬁBÄ‚BÄíBÄ¢BÄ*,ÉGive parameters for JOINBÄ˘BÄÙ\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄ˛BÄÏBÄ˚BÄÌBÄ˚BÄÓBÄˇBÄ˛BÄBÄÙBÄBÄªBÄBÄ˘BÄÙBÄÃÄ\ÄBÄ^BÄ‡ÇDESTROY-DATABASEÄÎÄ	ÜÄ@»FÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ!\ÄBÄmBÄ°BÄÅBÄ:\ÄBÄßBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛,ßDelete the specified database from memory and all the corresponding files from
-   disk if the keyword DISK is T.
-
-   DATABASE - Name of the database to be destroyed.
-   DISK     - If T, all the relevant files will be deleted.  (DESTROY-DATABASE DATABASE &REST KEYWORD-LIST &KEY &OPTIONAL DISK &ALLOW-OTHER-KEYS)ÄÄBÄõëBÄ‹¿lÄ~S¿BÄ"¿BÄÅ¿BÄ≠“BÄﬂ“BÄ"íPA¡Pˇ€PPÅQPÇQí@√ö	öAëÅQ@Q
-îOÄ0BÄ!Ä1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄ"\ÄBÄ8\ÄBÄÍ,ÇDestroy DatabaseBÄÏBÄ4BÄÌBÄ4BÄÓ\Ä\Ä•Ä KBÄêBÄ˛lÉUsed to destroy databasesÄBÄÙ\Ä\ÄBÄaBÄ˜¨ÅManipulationBÄª\ÄBÄΩ\ÄÄ*ÏÅDatabase Name:BÄ¿BÄ:BÄ¡\ÄBÄ˛ÏÑName of the database to be destroyed.ÄBÄƒ\ÄÄ*ÏÇDelete from the DISK:ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛Ï IF YES all the files pertaining to this database are deleted but NOT EXPUNGED.BÄ¶BÄ*ÏÑGive parameters for DESTROY DATABASE:ÄBÄ˘BÄ.\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄ7BÄÏBÄ4BÄÌBÄ4BÄÓBÄ8BÄ˛BÄ;BÄÙBÄ<BÄªBÄ?BÄ˘BÄ.BÄÃÄ\ÄBÄ^BÄ‡√ÅDESTROY-DOMAINÄÎÄ
-ÜÄ@
-ÑFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄO\ÄBÄmBÄ‰BÄ:BÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛ÏèDestroys the domain definition but keeps the domain predicate to handle previously defined data.  (DESTROY-DOMAIN DOMAIN-NAME)ÄBÄõëBÄ‹¿lÄ~S¿BÄP¿BÄ≠“BÄﬂ“BÄPíP@¡Pˇ€PPÅQíö@ëÅQ	åOÄ]BÄOÄ1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄP\ÄBÄ8\ÄBÄÍÏÅDestroy DomainBÄÏBÄaBÄÌBÄaBÄÓ\Ä•Ä`KBÄ˛,ÉUsed to destroy domains.BÄÙ\Ä\ÄBÄaBÄ˜¨ÅManipulationBÄª\ÄBÄΩ\ÄÄ*¨ÅDomain Name:BÄ¿BÄ:BÄ¡\ÄBÄ˛¨ÑName of the domain to be destroyed.ÄBÄƒBÄ*¨ÑGive parameters for DESTROY DOMAIN:ÄBÄ˘BÄ[\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄdBÄÏBÄaBÄÌBÄaBÄÓBÄeBÄ˛BÄgBÄÙBÄhBÄªBÄkBÄ˘BÄ[BÄÃÄ\ÄBÄ^BÄ‡√ÇDESTROY-IMPLEMENTATIONÄÎÄ
-ÜÄ@
-ÑFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄw\ÄBÄmBÄBÄ:BÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛,óDestroys implementation type definition but keeps the accessor functions to handle previously defined relations using this implementation.  (DESTROY-IMPLEMENTATION IMPLEMENTATION-NAME)ÄBÄõëBÄ‹¿lÄ~S¿BÄx¿BÄ≠“BÄﬂ“BÄxíP@¡Pˇ€PPÅQíö@ëÅQ	åOÄÖBÄwÄ1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄx\ÄBÄ8\ÄBÄÍÏÇDestroy ImplementationBÄÏBÄ BÄÌBÄ BÄÓ\Ä\ÄBÄ:BÄÕBÄ˛,ÑUsed to destroy implementations.BÄÙ\Ä\ÄBÄaBÄ˜¨ÅManipulationBÄª\ÄBÄΩ\ÄÄ*¨ÇImplementation Name:BÄ¿BÄ:BÄ¡\ÄBÄ˛¨ÖName of the implementation to be destroyed.ÄBÄƒBÄ*¨ÖGive parameters for DESTROY IMPLEMENTATION:ÄBÄ˘BÄÉ\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄåBÄÏBÄ BÄÌBÄ BÄÓBÄ
-BÄ˛BÄèBÄÙBÄêBÄªBÄìBÄ˘BÄÉBÄÃÄ\ÄBÄ^BÄ‡√ÅDESTROY-INDEXÄÄÎÄ
-ÜÄ@
-ƒFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄü\ÄBÄmBÄ∏BÄ.BÄ:BÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛,üDestroy the specified index which is defined on the specified relation.
-
-   RELATION-NAME - The name of the relation upon which the relation is defined.
-   INDEX-NAME - The name of the index to be deleted.  (DESTROY-INDEX RELATION-NAME INDEX-NAME)ÄÄBÄõëBÄ‹¿lÄ~S¿BÄ†¿BÄ≠“BÄﬂ“BÄ†íP@¡Pˇ€PPÅQÇQöö@ëÅQÇQ	îOÄ≠BÄüÄ1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄ†\ÄBÄ8\ÄBÄÍÏÅDestroy IndexÄBÄÏBÄ±BÄÌBÄ±BÄÓ\Ä\ÄBÄ:BÄBBÄ˛,ÉUsed to destroy indices.BÄÙ\Ä\ÄBÄaBÄ˜¨ÅManipulationBÄª\ÄBÄΩ\ÄÄ*ÏÅRelation Name:BÄ¿BÄ:BÄ¡\ÄBÄ˛¨àName of the relation on which the index to be destroyed is defined.ÄBÄƒ\ÄÄ*¨ÅIndex Name:ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛lÑName of the index to be destroyed.BÄƒBÄ*lÑGive parameters for DESTROY INDEX:BÄ˘BÄ´\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄ¥BÄÏBÄ±BÄÌBÄ±BÄÓBÄµBÄ˛BÄ∑BÄÙBÄ∏BÄªBÄªBÄ˘BÄ´BÄÃÄ\ÄBÄ^BÄ‡CÉDESTROY-STORAGE-STRUCTUREÄÄÎÄ
-ÜÄ@
-ÑFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄÀ\ÄBÄmBÄ0BÄ:BÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛,óDestroys storage structure definition but keeps the accessor functions to handle previously defined relations using this structure.  (DESTROY-STORAGE-STRUCTURE STORAGE-STRUCTURE-NAME)ÄÄBÄõëBÄ‹¿lÄ~S¿BÄÃ¿BÄ≠“BÄﬂ“BÄÃíP@¡Pˇ€PPÅQíö@ëÅQ	åOÄŸBÄÀÄ1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄÃ\ÄBÄ8\ÄBÄÍlÉDestroy Storage StructureÄBÄÏBÄ›BÄÌBÄ›BÄÓ\Ä\ÄBÄ:BÄLÄ˛¨ÑUsed to destroy storage structures.ÄBÄÙ\Ä\ÄBÄaBÄ˜¨ÅManipulationBÄª\ÄBÄΩ\ÄÄ*,ÉStorage structure name:ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛ÏÖName of the storage structure to be destroyed.BÄƒBÄ*ÏÖGive parameters for DESTROY STORAGE STRUCTURE:BÄ˘BÄ◊\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄ‡BÄÏBÄ›BÄÌBÄ›BÄÓBÄ·BÄ˛BÄ„BÄÙBÄ‰BÄªBÄÁBÄ˘BÄ◊BÄÃÄ\ÄBÄ^BÄ‡ÉÅDESTROY-VIEWÄÎÄ
-ÜÄ@
-ÑFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄÛ\ÄBÄmBÄb	BÄ:BÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛,áDestroys the view from memory.  (DESTROY-VIEW VIEW-NAME)ÄBÄõëBÄ‹¿lÄ~S¿BÄÙ¿BÄ≠“BÄﬂ“BÄÙíP@¡Pˇ€PPÅQíö@ëÅQ	åOÄBÄÛÄ1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄÙ\ÄBÄ8\ÄBÄÍ¨ÅDestroy ViewBÄÏBÄBÄÌBÄBÄÓ\Ä\ÄBÄ:BÄt	BÄ˛ÏÇUsed to destroy views.BÄÙ\Ä\ÄBÄaBÄ˜¨ÅManipulationBÄª\ÄBÄΩ\ÄÄ*lÅView name:BÄ¿BÄ:BÄ¡\ÄBÄ˛lÑName of the view to be destroyed.ÄBÄƒBÄ*lÑGive parameters for DESTROY VIEW:ÄBÄ˘BÄˇ\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄBÄÏBÄBÄÌBÄBÄÓBÄ	BÄ˛BÄBÄÙBÄBÄªBÄBÄ˘BÄˇBÄÃÄ\ÄBÄ^BÄ‡ÇDESTROY-RELATIONÄÎÄ	ÜÄ@»FÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ\ÄBÄmBÄ†BÄÅBÄ:\ÄBÄßBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛l¶Deletes the specified relation from the active database.
-   Deletes all the files on disk if keyword DISK is t.
-
-   RELATION - Name of the relation to be destroyed.
-   DISK     - If T, the relevant files will be deleted.  (DESTROY-RELATION RELATION &REST KEYWORD-LIST &KEY &OPTIONAL DISK &ALLOW-OTHER-KEYS)ÄBÄõëBÄ‹¿lÄ~S¿BÄ¿BÄÅ¿BÄ≠“BÄﬂ“BÄíPA¡Pˇ€PPÅQPÇQí@√ö	öAëÅQ@Q
-îOÄ*BÄÄ1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄ\ÄBÄ8\ÄBÄÍ,ÇDestroy RelationBÄÏBÄ.BÄÌBÄ.BÄÓ\Ä\ÄBÄ:BÄBÄ˛lÉUsed to destroy relationsÄBÄÙ\Ä\ÄBÄaBÄ˜¨ÅManipulationBÄª\ÄBÄΩ\ÄÄ*ÏÅRelation Name:BÄ¿BÄ:BÄ¡\ÄBÄ˛ÏÑName of the relation to be destroyed.ÄBÄƒ\ÄÄ*ÏÇDelete from the DISK:ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛¨ IF YES the file corresponding to this relation is deleted but NOT EXPUNGED.ÄBÄ¶BÄ*ÏÑGive parameters for DESTROY RELATION:ÄBÄ˘BÄ(\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄ1BÄÏBÄ.BÄÌBÄ.BÄÓBÄ2BÄ˛BÄ4BÄÙBÄ5BÄªBÄ8BÄ˘BÄ(BÄÃÄ\ÄBÄ^BÄ‡CÇDESTROY-ATTRIBUTEÄÄÎÄ
- ÜÄAFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄH\ÄBÄmBÄ†BÄ√BÄ¢BÄ:\ÄBÄßBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛,ØAttributes in a relation can be deleted using this function.
-
-   RELATION-NAME - Name of the relation from which the attributes are to be deleted.
-   ATTRIBUTE     - List of attributes to be destroyed.
-   KEY           - List of attributes to form the new key, if so desired.  (DESTROY-ATTRIBUTE RELATION-NAME &REST KEYWORD-LIST &KEY &OPTIONAL ATTRIBUTE KEY &ALLOW-OTHER-KEYS)ÄBÄõëBÄ‹¿lÄ~S¿BÄI¿BÄ√¿BÄ¢¿BÄ≠“BÄﬂ“BÄIíPA¡Pˇ€PPÅQPÇQPÉQ	¢@√	ö
-öAëÅQ@QîOÄWBÄHÄ1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄI\ÄBÄ8\ÄBÄÍlÇDestroy AttributeÄBÄÏBÄ[BÄÌBÄ[BÄÓ\Ä\ÄBÄ:BÄÚBÄ˛lÖUsed to destroy attributes from relationsÄBÄÙ\Ä\ÄBÄaBÄ˜¨ÅManipulationBÄª\ÄÄΩ\ÄÄ*ÏÅRelation Name:BÄ¿BÄ:BÄ¡\ÄBÄ˛,àName of the relation from which attributes are to be destroyed.ÄBÄƒ\ÄÄ*¨ÅAttributes:ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛ÏÉList of attributes to destroy.BÄƒ\ÄÄ*¨ÄKey:BÄ¿BÄ:BÄ¡\ÄBÄ˛,èNew key for the relation if it is to be different from the previous value or if any of the key attributes are destroyed.BÄƒBÄ*ÏÑGive parameters for DESTROY ATTRIBUTE:BÄ˘BÄU\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄ^BÄÏBÄ[BÄÌBÄ[BÄÓBÄ_BÄ˛BÄaBÄÙBÄbBÄªBÄeBÄ˘BÄUBÄÃÄ\ÄBÄ^BÄ‡ÍÄUNIONÄÄÎÄ9ÜÄCFÄ'¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄy\ÄBÄmBÄBÄNBÄ¬BÄﬂBÄ†BÄ°BÄ¢BÄ£BÄ¨BÄTBÄWBÄ:\ÄBÄßBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛ÏøsUnion of tuples in two relations.
-
-   FROM                 - This clause specifies the relations to participate in the UNION operation.
-                          In addition, RTMS allows users to specify the attributes in these relations to
-                          participate in the operation as well as a where-clause to specify the tuples.
-                          It should be of the format: (RelA [(PROJECT <attrA> WHERE where-clause-A)] RelB
-                          [(PROJECT <attrB> WHERE where-clause-B)]) where attrA indicates attributes in
-                          relation relA and where-clause-A indicates a where-clause involving the attributes
-                          in relation relA.
-   INTO                 - If the result is to be inserted in a relation, specify the name of that relation.
-                          If the above relation is not defined, RTMS defines it with the following keywords.
-   DIRECTORY            - Save directory for this relation.
-   DOCUMENTATION        - Documentation for this relation.
-   FORMAT               - List of print widths for the attributes in this relation.
-   IMPLEMENTATION-TYPE  - Name of the implementation type to be used.
-   KEY                  - List of the resultant attributes to form the key for this relation.
-   STORAGE-STRUCTURE    - Name of the storage-structure.
-   PRINT                - If NIL, the resultant relation will not be printed out.
-   TUPLES               - If T, the resultant tuples will be returned.
-   UNIQUE               - If T, only unique tuples will be part of the resultant relation.  (RELATION-UNION &REST KEYWORD-LIST &KEY &OPTIONAL FROM INTO DIRECTORY DOCUMENTATION FORMAT IMPLEMENTATION-TYPE STORAGE-STRUCTURE KEY PRINT TUPLES UNIQUE &ALLOW-OTHER-KEYS)ÄÄBÄõëBÄ‹¿lÄ~S¿√ÅRELATION-UNION¿BÄN¿BÄ¿BÄ¬¿BÄﬂ¿BÄ†¿BÄ°¿BÄ¢¿BÄ£¿BÄ¨¿BÄT¿BÄW¿BÄ≠“BÄﬂ“BÄàíPA¡Pˇ€PPPÇQPÅQ	PÉQ
-PÑQPÖQPÜQPáQPàQP QPäQPãQJ∫@√íöAë@QåOÄ BÄyÄ1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄz\ÄBÄ8\ÄBÄÍÏÄUnionÄBÄÏBÄ
-BÄÌBÄ
-BÄÓ\Ä\Ä•Ä O•Ä UBÄ˛ÏÖUsed to form union of two compatible relationsBÄÙ\Ä\ÄBÄaBÄ˜lÅOperatorsÄBÄª\ÄBÄΩ\ÄÄ*ÏÇList of two relations:BÄ¿BÄ:BÄ¡\ÄBÄ˛¨§List of the names of two relations which will take part in the relation union operation. The attributes to be projected and a where clause can be specified for each relation using keywords. For instance, (REL1 (PROJECT <attr> WHERE <where-claue>) REL2 (WHERE <where-clause> PROJECT <attr>)).ÄBÄƒBÄu\ÄÄ*,ÅTuples?ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛,ëSpecify if the resultant tuples be returned rather than inserted in a relation. The following parameters can be ignored if this is true.BÄ¶BÄÕBÄ—BÄyBÄ⁄BÄﬁBÄ‚BÄíBÄ¢BÄ*ÏÖParameters for the set-union of two relationsÄBÄ˘BÄÜ\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄêBÄÏBÄ
-BÄÌBÄ
-BÄÓBÄëBÄ˛BÄïBÄÙBÄñBÄªBÄôBÄ˘BÄÜBÄÃÄ\ÄBÄ^BÄ‡CÅDIFFERENCEÄÎÄ9ÜÄCFÄ'¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ©\ÄBÄmBÄBÄNBÄ¬BÄﬂBÄ†BÄ°BÄ¢BÄ£BÄ¨BÄTBÄWBÄ:\ÄBÄßBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛Ïø|Difference of the tuples in two relations.
-
-   FROM                 - This clause specifies the relations to participate in the DIFFERENCE operation.
-                          In addition, RTMS allows users to specify the attributes in these relations to
-                          participate in the operation as well as a where-clause to specify the tuples.
-                          It should be of the format: (RelA [(PROJECT <attrA> WHERE where-clause-A)] RelB
-                          [(PROJECT <attrB> WHERE where-clause-B)]) where attrA indicates attributes in
-                          relation relA and where-clause-A indicates a where-clause involving the attributes
-                          in relation relA.
-   INTO                 - If the result is to be inserted in a relation, specify the name of that relation.
-                          If the above relation is not defined, RTMS defines it with the following keywords.
-   DIRECTORY            - Save directory for this relation.
-   DOCUMENTATION        - Documentation for this relation.
-   FORMAT               - List of print widths for the attributes in this relation.
-   IMPLEMENTATION-TYPE  - Name of the implementation type to be used.
-   KEY                  - List of the resultant attributes to form the key for this relation.
-   STORAGE-STRUCTURE    - Name of the storage-structure.
-   PRINT                - If NIL, the resultant relation will not be printed out.
-   TUPLES               - If T, the resultant tuples will be returned.
-   UNIQUE               - If T, only unique tuples will be part of the resultant relation.  (RELATION-DIFFERENCE &REST KEYWORD-LIST &KEY &OPTIONAL FROM INTO DIRECTORY DOCUMENTATION FORMAT IMPLEMENTATION-TYPE STORAGE-STRUCTURE KEY PRINT TUPLES UNIQUE &ALLOW-OTHER-KEYS)ÄBÄõëBÄ‹¿lÄ~S¿ÉÇRELATION-DIFFERENCEÄ¿BÄN¿BÄ¿BÄ¬¿BÄﬂ¿BÄ†¿BÄ°¿BÄ¢¿BÄ£¿BÄ¨¿BÄT¿BÄW¿BÄ≠“BÄﬂ“BÄ∏íPA¡Pˇ€PPPÇQPÅQ	PÉQ
-PÑQPÖQPÜQPáQPàQP QPäQPãQJ∫@√íöAë@QåOÄπBÄ©Ä1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄ™\ÄBÄ8\ÄBÄÍlÅDifferenceBÄÏBÄΩBÄÌBÄΩBÄÓ\Ä\ÄBÄìBÄêBÄ˛¨ÜUsed to form difference of two compatible relationsÄBÄÙ\Ä\ÄBÄaBÄ˜lÅOperatorsÄBÄª\ÄBÄΩ\ÄÄ*ÏÇList of two relations:BÄ¿BÄ:BÄ¡\ÄBÄ˛,•List of the names of two relations which will take part in the relation difference operation. The attributes to be projected and a where clause can be specified for each relation using keywords. For instance, (REL1 (PROJECT <attr> WHERE <where-claue>) REL2 (WHERE <where-clause> PROJECT <attr>)).BÄƒBÄu\ÄÄ*,ÅTuples?ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛,ëSpecify if the resultant tuples be returned rather than inserted in a relation. The following parameters can be ignored if this is true.BÄ¶BÄÕBÄ—BÄyBÄ⁄BÄﬁBÄ‚BÄíBÄ¢BÄ*lÜParameters for the set-difference of two relationsBÄ˘BÄ∂\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄ¿BÄÏBÄΩBÄÌBÄΩBÄÓBÄ¡BÄ˛BÄ√BÄÙBÄƒBÄªBÄ«BÄ˘BÄ∂BÄÃÄ\ÄBÄ^BÄ‡™ÅINTERSECTIONÄÎÄ9ÜÄCFÄ'¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ◊\ÄBÄmBÄBÄNBÄ¬BÄﬂBÄ†BÄ°BÄ¢BÄ£BÄ¨BÄTBÄWBÄ:\ÄBÄßBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛Ïø}Intersection of tuples in two relations.
-
-   FROM                 - This clause specifies the relations to participate in the INTERSECTION operation.
-                          In addition, RTMS allows users to specify the attributes in these relations to
-                          participate in the operation as well as a where-clause to specify the tuples.
-                          It should be of the format: (RelA [(PROJECT <attrA> WHERE where-clause-A)] RelB
-                          [(PROJECT <attrB> WHERE where-clause-B)]) where attrA indicates attributes in
-                          relation relA and where-clause-A indicates a where-clause involving the attributes
-                          in relation relA.
-   INTO                 - If the result is to be inserted in a relation, specify the name of that relation.
-                          If the above relation is not defined, RTMS defines it with the following keywords.
-   DIRECTORY            - Save directory for this relation.
-   DOCUMENTATION        - Documentation for this relation.
-   FORMAT               - List of print widths for the attributes in this relation.
-   IMPLEMENTATION-TYPE  - Name of the implementation type to be used.
-   KEY                  - List of the resultant attributes to form the key for this relation.
-   STORAGE-STRUCTURE    - Name of the storage-structure.
-   PRINT                - If NIL, the resultant relation will not be printed out.
-   TUPLES               - If T, the resultant tuples will be returned.
-   UNIQUE               - If T, only unique tuples will be part of the resultant relation.  (RELATION-INTERSECTION &REST KEYWORD-LIST &KEY &OPTIONAL FROM INTO DIRECTORY DOCUMENTATION FORMAT IMPLEMENTATION-TYPE STORAGE-STRUCTURE KEY PRINT TUPLES UNIQUE &ALLOW-OTHER-KEYS)ÄBÄõëBÄ‹¿lÄ~S¿√ÇRELATION-INTERSECTIONÄ¿BÄN¿BÄ¿BÄ¬¿BÄﬂ¿BÄ†¿BÄ°¿BÄ¢¿BÄ£¿BÄ¨¿BÄT¿BÄW¿BÄ≠“BÄﬂ“BÄÊíPA¡Pˇ€PPPÇQPÅQ	PÉQ
-PÑQPÖQPÜQPáQPàQP QPäQPãQJ∫@√íöAë@QåOÄÁBÄ◊Ä1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄÿ\ÄBÄ8\ÄBÄÍ¨ÅIntersectionBÄÏBÄÎBÄÌBÄÎBÄÓ\Ä\ÄBÄìBÄÕBÄ˛ÏÜUsed to form intersection of two compatible relationsÄBÄÙ\Ä\ÄBÄaBÄ˜lÅOperatorsÄBÄª\ÄBÄΩ\ÄÄ*ÏÇList of two relations:BÄ¿BÄ:BÄ¡\ÄBÄ˛l•List of the names of two relations which will take part in the relation intersection operation. The attributes to be projected and a where clause can be specified for each relation using keywords. For instance, (REL1 (PROJECT <attr> WHERE <where-claue>) REL2 (WHERE <where-clause> PROJECT <attr>)).BÄƒBÄu\ÄÄ*,ÅTuples?ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛,ëSpecify if the resultant tuples be returned rather than inserted in a relation. The following parameters can be ignored if this is true.BÄ¶BÄÕBÄ—BÄyBÄ⁄BÄﬁBÄ‚BÄíBÄ¢BÄ*¨ÜParameters for the set-intersection of two relationsBÄ˘BÄ‰\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄÓBÄÏBÄÎBÄÌBÄÎBÄÓBÄÔBÄ˛BÄÒBÄÙBÄÚBÄªBÄıBÄ˘BÄ‰BÄÃÄ\ÄBÄ^BÄ‡ÅAVERAGEÄÄÎÄ(ÜÄA»FÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ\ÄBÄmBÄ†BÄüBÄWBÄ‰
-CÄBYBÄ¬BÄ:\ÄBÄßBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛ÏøIAverage of the values of a given attribute in a relation satisfying a where clause.
-
-   RELATION-NAME  - Name of the relation.
-   ATTRIBUTE-NAME - Name of the attribute whose average is to be found.
-   UNIQUE         - If T, only unique values will be used.
-   WHERE          - If a selection criterion is provided, only the satisfying values will be used.
-   BY             - Name of the attribute to group average of the above attribute by.
-   TUPLES         - If T, the resultant values will be returned rather than printed out as a table.  (AVERAGE RELATION-NAME ATTRIBUTE-NAME &REST KEYWORD-LIST &KEY &OPTIONAL UNIQUE WHERE BY TUPLES &ALLOW-OTHER-KEYS)ÄÄBÄõëBÄ‹¿lÄ~S¿BÄ¿BÄW¿BÄ‰
-¿BÄ¿BÄ¬¿BÄ≠“BÄﬂ“BÄíPA¡Pˇ€PPÅQÇQPÉQPÑQ	PÖQ
-PÜQJ∫@√¢öAëÅQÇQ@QúOÄBÄÄ1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄ\ÄBÄ8\ÄBÄÍ,ÅAverageÄBÄÏBÄBÄÌBÄBÄÓ\Ä\ÄBÄìBÄÚBÄ˛làUsed to compute the average of the attribute values in a relation.BÄÙ\Ä\ÄBÄaBÄ˜lÅOperatorsÄBÄª\Ä	BÄΩ\ÄÄ*ÏÅRelation name:BÄ¿BÄ~BÄ¡\ÄBÄ˛làName of the relation which contains the attribute to be averaged.ÄBÄƒ\ÄÄ*,ÇAttribute name:ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛¨ÖName of the attribute in the above relation.BÄƒ\ÄÄ*,ÅUnique?ÄBÄ¿BÄ:BÄ¡\ÄBÄ˛läIf true, only the unique values of the attribute will be used in the calculations.BÄ¶BÄ˘
-\ÄÄ*lÄByBÄ¿BÄ:BÄ¡\ÄBÄ˛ÏàSpecify the attribute to be used in grouping the data into categories.BÄƒBÄñBÄ*,ÉParameters for average:ÄBÄ˘BÄ\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄBÄÏBÄBÄÌBÄBÄÓBÄBÄ˛BÄBÄÙBÄ BÄªBÄ#BÄ˘BÄBÄÃÄ\ÄBÄ^BÄ‡ÉÄSUMÄÄÎÄ(ÜÄA»FÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄ;\ÄBÄmBÄ†BÄüBÄWBÄ‰
-BÄBÄ¬BÄ:\ÄBÄßBÄ:\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛ÏøASum of the values of a given attribute in a relation satisfying a where clause.
-
-   RELATION-NAME  - Name of the relation.
-   ATTRIBUTE-NAME - Name of the attribute whose sum is to be found.
-   UNIQUE         - If T, only unique values will be used.
-   WHERE          - If a selection criterion is provided, only the satisfying values will be used.
-   BY             - Name of the attribute to group sum of the above attribute by.
-   TUPLES         - If T, the resultant values will be returned rather than printed out as a table.  (SUM RELATION-NAME ATTRIBUTE-NAME &REST KEYWORD-LIST &KEY &OPTIONAL UNIQUE WHERE BY TUPLES &ALLOW-OTHER-KEYS)ÄÄBÄõëBÄ‹¿lÄ~S¿BÄ<¿BÄW¿BÄ¿BÄ¬¿BÄ‰
-¿BÄ≠“BÄﬂ“BÄ<íPA¡Pˇ€PPÅQÇQPÉQPÖQ	PÜQ
-PÑQJ∫@√¢öAëÅQÇQ@QúOÄJBÄ;Ä1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄ<\ÄBÄ8\ÄBÄÍ¨ÄSumÄBÄÏBÄNBÄÌBÄNBÄÓ\Ä\ÄBÄìBÄLÄ˛ÏáUsed to compute the sum of the attribute values in a relation.BÄÙ\Ä\ÄBÄaBÄ˜lÅOperatorsÄBÄª\Ä	BÄΩ\ÄÄ*ÏÅRelation name:BÄ¿BÄ~BÄ¡\ÄBÄ˛,àName of the relation which contains the attrLMFL#!C(:HOST "SW-MFG" :BACKUP-DATE 2760540758. :SYSTEM-TYPE :LOGICAL :VERSION 1. :TYPE "LISP" :NAME "MACROS" :DIRECTORY ("RTMS-DIR") :SOURCE-PATTERN "( :DIRECTORY (\"RTMS-DIR\") :NAME :WILD :TYPE :WILD :VERSION :NEWEST)" :CHARACTERS T :NOT-BACKED-UP T :CREATION-DATE 2749846222. :AUTHOR "REL3" :LENGTH-IN-BYTES 11371. :LENGTH-IN-BLOCKS 12. :BYTE-SIZE 8.)
-
-;;; -*- Mode:Common-Lisp; Package:RTMS; Fonts:(*CODE-FONT* *COMMENT-FONT* *STRING-FONT*); Base:10 -*-
-;;; Copyright (c) by Texas Instruments, Incorporated
-;;; All rights reserved
-;;; MACROS
-;;;
-;;; This file contains the following Explorer extensions to CommonLisp d as Indicated in the June 1985 Explorer Lisp
-;;; Reference
-;;;
-;;; This file comtains the following obsolete functions
-;;;
-;;; This file contains the following functions which are unknown in CommonLisp
-;;;
-;;; The following function contains flavor references and thus are incompatable with CommonLisp. Their removal will not
-;;; effect the functionality of RTMS.
-;;;
-
-(defmacro abort-transaction* (&rest ignore)
-  `(abort-transaction))
-
-(defmacro active-database* ()
-  `(active-database))
-
-(defmacro active-db* ()
-  `(active-database))
-
-(defmacro andp (&rest predicates)
-  `(and* (quote ,predicates) t))
-
-
-(defmacro attach-relation* (relation-name &rest keyword-list)
-  `(attach-relation (quote ,relation-name) (quote ,keyword-list)))
-
-(defmacro average* (relation-name attribute-name &rest keyword-list)
-`(average (quote ,relation-name) (quote ,attribute-name) (quote ,keyword-list)))
-
-(defmacro begin-transaction* (&rest ignore)
-  `(begin-transaction))
-
-(defmacro commit-transaction* (transaction &rest keyword-list)
-  `(commit-transaction (quote ,transaction) (quote ,keyword-list)))
-
-(defmacro count-rtms* (relation-name attribute-name &rest keyword-list)
-`(count-rtms (quote ,relation-name) (quote ,attribute-name) (quote ,keyword-list)))
-
-(defmacro define-attribute* (relation attr-des &rest keyword-list)
-`(define-attribute (quote ,relation) (quote ,attr-des) (quote ,keyword-list)))
-
-(defmacro defattr* (relation attr-des &rest keyword-list)
-`(define-attribute (quote ,relation) (quote ,attr-des) (quote ,keyword-list)))
-
-(defmacro defdb* (db-name &rest keyword-list)
-`(define-database (quote ,db-name) (quote ,keyword-list)))
-
-(defmacro define-database* (db-name &rest keyword-list)
-`(define-database (quote ,db-name) (quote ,keyword-list)))
-
-(defmacro define-domain* (domain-name &rest keyword-list)
- `(define-domain (quote ,domain-name) (quote ,keyword-list)))
-
-(defmacro defenv* (environment-name &rest keyword-list)
-`(define-environment (quote ,environment-name) (quote ,keyword-list)))
-
-(defmacro define-environment* (environment-name &rest keyword-list)
-`(define-environment (quote ,environment-name) (quote ,keyword-list)))
-
-(defmacro define-implementation* (implementation-name &rest keyword-list)
-  `(define-implementation (quote ,implementation-name) (quote ,keyword-list)))
-
-(defmacro define-index* (relation &rest keyword-list)
-`(define-index (quote ,relation) (quote ,keyword-list)))
-
-(defmacro define-storage-structure* (storage-structure-name &rest keyword-list)
-  `(define-storage-structure (quote ,storage-structure-name) (quote ,keyword-list)))
-
-(defmacro defrel* (relation-name attribute-descriptor &rest keyword-list)
-  `(define-relation (quote ,relation-name) (quote ,attribute-descriptor) (quote ,keyword-list)))
-
-(defmacro define-relation* (relation-name attribute-descriptor &rest keyword-list)
-  `(define-relation (quote ,relation-name) (quote ,attribute-descriptor) (quote ,keyword-list)))
-
-(defmacro define-transaction* (transaction forms &rest keyword-list)
-  `(define-transaction (quote ,transaction) (quote ,forms) (quote ,keyword-list)))
-
-(defmacro defrel-restore (relation-name attribute-descriptor &rest keyword-list)
-  `(defrel-restore* (quote ,relation-name) (quote ,attribute-descriptor) (quote ,keyword-list)))
-
-(defmacro defview* (viewname viewdef)
-  `(define-view (quote ,viewname) (quote ,viewdef)))
-
-(defmacro define-view* (viewname viewdef)
-  `(define-view (quote ,viewname) (quote ,viewdef)))
-
-(defmacro delete-tuples* (relation &rest keyword-list)
-  `(delete-tuples (quote ,relation) (quote ,keyword-list)))
-
-(defmacro destroy-attr* (relation &rest keyword-list)
-`(destroy-attribute (quote ,relation) (quote ,keyword-list)))
-
-(defmacro destroy-attribute* (relation &rest keyword-list)
-`(destroy-attribute (quote ,relation) (quote ,keyword-list)))
-
-(defmacro destroy-db* (db-name &rest keyword-list)
-  `(destroy-database (quote ,db-name) (quote ,keyword-list)))
-
-(defmacro destroy-database* (db-name &rest keyword-list)
-  `(destroy-database (quote ,db-name) (quote ,keyword-list)))
-
-(defmacro destroy-domain* (domain-name)
-  `(destroy-domain (quote ,domain-name)))
-
-(defmacro destroy-implementation* (implementation-name)
-  `(destroy-implementation (quote ,implementation-name)))
-
-(defmacro destroy-index* (relation-name index-name &rest keyword-list)
-  `(destroy-index (quote ,relation-name) (quote ,index-name) (quote ,keyword-list)))
-
-(defmacro destroy-relation* (relation-name &rest keyword-list)
-  `(destroy-relation (quote ,relation-name) (quote ,keyword-list)))
-
-(defmacro destroy-rel* (relation-name &rest keyword-list)
-  `(destroy-relation (quote ,relation-name) (quote ,keyword-list)))
-
-(defmacro destroy-storage-structure* (storage-structure-name)
-  `(destroy-storage-structure (quote ,storage-structure-name)))
-
-(defmacro destroy-view* (view-name)
-  `(destroy-view (quote ,view-name)))
-
-(defmacro describe* (&optional object &rest ignore)
-  `(help (quote ,object)))
-
-(defmacro detach-relation* (relation-name &rest keyword-list)
-  `(detach-relation (quote ,relation-name) (quote ,keyword-list)))
-
-(defmacro end-transaction* (&rest ignore)
-  `(end-transaction))
-
-(defmacro envstat* ()
-  (environment-status))
-
-(defmacro environment-status* ()
-  (environment-status))
-
-(defmacro equalp* (&rest items)
-  `(*equalp (quote ,items)))
-
-(defmacro gep* (&rest items)
-  `(gep (quote ,items)))
-
-(defmacro gtp* (&rest items)
-  `(gtp (quote ,items)))
-
-(defmacro help* (&optional object &rest ignore)
-  `(help (quote ,object)))
-
-(defmacro insert* (relation &rest keyword-list)
-  `(insert (quote ,relation) (quote ,keyword-list)))
-
-(defmacro insert-tuples* (relation &rest keyword-list)
-  `(insert (quote ,relation) (quote ,keyword-list)))
-
-(defmacro join* (&rest keyword-list)
-  `(join (quote ,keyword-list)))
-
-(defmacro lep* (&rest items)
-  `(lep (quote ,items)))
-
-(defmacro ltp* (&rest items)
-  `(ltp (quote ,items)))
-
-(defmacro loaddb* (dbname &rest keyword-list)
-  `(load-database (quote ,dbname) (quote ,keyword-list)))
-
-(defmacro load-database* (dbname &rest keyword-list)
-  `(load-database (quote ,dbname) (quote ,keyword-list)))
-
-(defmacro load-env* (envname &rest keyword-list)
-  `(load-environment (quote ,envname) (quote ,keyword-list)))
-
-(defmacro load-environment* (envname &rest keyword-list)
-  `(load-environment (quote ,envname) (quote ,keyword-list)))
-
-(defmacro load-rel* (relation-name &rest keyword-list)
-  `(load-relation (quote ,relation-name) (quote ,keyword-list)))
-
-(defmacro load-relation* (relation-name &rest keyword-list)
-  `(load-relation (quote ,relation-name) (quote ,keyword-list)))
-
-(defmacro maptuple* (dbfunction relation-name)
-  `(maptuple (quote ,dbfunction) (quote ,relation-name)))
-
-(defmacro mapt* (dbfunction relation-name)
-  `(mapt (quote ,dbfunction) (quote ,relation-name)))
-
-(defmacro modify* (relation &rest keyword-list)
-  `(modify (quote ,relation) (quote ,keyword-list)))
-
-(defmacro modify-attribute* (relation attribute &rest keyword-list)
-  `(modify-attribute (quote ,relation) (quote ,attribute) (quote ,keyword-list)))
-
-(defmacro modify-database* (database &rest keyword-list)
-  `(modify-database (quote ,database) (quote ,keyword-list)))
-
-(defmacro modify-relation* (relation &rest keyword-list)
-  `(modify-relation (quote ,relation) (quote ,keyword-list)))
-
-(defmacro modify-domain* (domain-name &rest keyword-list)
-  `(modify-domain (quote ,domain-name) (quote ,keyword-list)))
-
-(defmacro modify-transaction* (transaction &rest keyword-list)
-  `(modify-transaction (quote ,transaction) (quote ,keyword-list)))
-
-(defmacro modify-tuples* (relation &rest keyword-list)
-  `(modify (quote ,relation) (quote ,keyword-list)))
-
-(defmacro modify-view* (view-name &rest keyword-list)
-  `(modify-view (quote ,view-name) (quote ,keyword-list)))
-
-(defmacro maximum* (relation-name attribute-name &rest keyword-list)
-  `(maximum (quote ,relation-name) (quote ,attribute-name) (quote ,keyword-list)))
-
-(defmacro minimum* (relation-name attribute-name &rest keyword-list)
-  `(minimum (quote ,relation-name) (quote ,attribute-name) (quote ,keyword-list)))
-
-(defmacro notp* (&rest items)
-  `(notp (quote ,items)))
-
-(defmacro printrel* (relation &rest keyword-list)
-  `(print-relation (quote ,relation) (quote ,keyword-list)))
-
-(defmacro print-relation* (relation &rest keyword-list)
-  `(print-relation (quote ,relation) (quote ,keyword-list)))
-
-(defmacro project* (relation-name &rest keyword-list)
-  `(project (quote ,relation-name) (quote ,keyword-list)))
-
-(defmacro r (relation-name &rest keyword-list)
-  `(retrieve (quote ,relation-name) (quote ,keyword-list)))
-
-(defmacro relation-difference* (&rest keyword-list)
-  `(relation-difference (quote ,keyword-list)))
-
-(defmacro relation-intersection* (&rest keyword-list)
-  `(relation-intersection (quote ,keyword-list)))
-
-(defmacro relation-union* (&rest keyword-list)
-  `(relation-union  (quote ,keyword-list)))
-
-(defmacro rename-attr* (relation-name &rest attributes)
-  `(rename-attribute (quote ,relation-name) (quote ,attributes)))
-
-
-(defmacro rename-attribute* (relation-name &rest attributes)
-  `(rename-attribute (quote ,relation-name) (quote ,attributes)))
-
-(defmacro rename-database* (&rest databases)
-  `(rename-database (quote ,databases)))
-
-(defmacro rename-db* (&rest databases)
-  `(rename-database (quote ,databases)))
-
-(defmacro rename-relation* (&rest relations)
-  `(rename-relation (quote ,relations)))
-
-(defmacro rename-rel* (&rest relations)
-  `(rename-relation (quote ,relations)))
-
-(defmacro retrieve* (relation-name &rest keyword-list)
-  `(retrieve (quote ,relation-name) (quote ,keyword-list)))
-
-(defmacro rtms-count* (relation-name attribute-name &rest keyword-list)
-`(count-rtms (quote ,relation-name) (quote ,attribute-name) (quote ,keyword-list)))
-
-(defmacro save-db* (&optional (dbname *active-db*) &rest keyword-list)
-  `(save-database (quote ,dbname) (quote ,keyword-list)))
-
-(defmacro save-database* (&optional (dbname *active-db*) &rest keyword-list)
-  `(save-database (quote ,dbname) (quote ,keyword-list)))
-
-(defmacro save-env* (&optional (envname *environment-name*) &rest keyword-list)
-  `(save-environment (quote ,envname) (quote ,keyword-list)))
-
-(defmacro save-environment* (&optional (envname *environment-name*) &rest keyword-list)
-  `(save-environment (quote ,envname) (quote ,keyword-list)))
-
-(defmacro save-rel* (relation-name &rest keyword-list)
-  `(save-relation (quote ,relation-name) (quote ,keyword-list)))
-
-(defmacro save-relation* (relation-name &rest keyword-list)
-  `(save-relation  (quote ,relation-name) (quote ,keyword-list)))
-
-(defmacro save-transaction* (transaction-name &rest keyword-list)
-  `(save-transaction (quote ,transaction-name) (quote ,keyword-list)))
-
-(defmacro select-tuples* (relation-name &rest keyword-list)
-  `(select-tuples (quote ,relation-name) (quote ,keyword-list)))
-
-(defmacro sum* (relation-name attribute-name &rest keyword-list)
-  `(sum (quote ,relation-name) (quote ,attribute-name) (quote ,keyword-list)))
-
-(defmacro size* (relation-name &rest keyword-list)
-  `(size (quote ,relation-name) (quote ,keyword-list)))
-
-ÄÏBÄZBÄÌBÄZBÄÓBÄ^BÄÙBÄBÄ˘BÄUBÄÃÄ\ÄBÄ^BÄ‡BÄÄÎÄÜÄ@DFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄf\ÄBÄmBÄ:\ÄÅCOMMANDÄ\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛¨ãIntroduction to the interface. Help on any database object (COMMAND / RELATION / ATTRIBUTE).Äp¿BÄu¨ÄSELF—√Å*HELP-SUBMENU*ëÈÅSUBMENU-CHOOSE¿)ÅEXECUTEÄÄPPÃCˇì@¡‰PP@ïROÄyBÄfÄ1Ä\ÄBÄ‚\ÄBÄÂ\ÄBÄ8\ÄBÄ^BÄ‡BÄ\ÄBÄ8\ÄBÄÍ¨ÄHelpBÄÏBÄ}BÄÌBÄ}BÄÙBÄjBÄ˛,ãIntroduction to the interface. Help on any database object (COMMAND/RELATION/ATTRIBUTE).BÄ˘BÄs\ÄBÄ8BÄ¸\ÄBÄˇ\ÄBÄ8BÄ¸\ÄBÄ8\ÄBÄ:BÄÍBÄÄBÄÏBÄ}BÄÌBÄ}BÄÙBÄjBÄ˛BÄÅBÄ˘BÄsBÄÃÄ\ÄBÄ^BÄ‡BÄaÄÎÄÜÄ@DFÄ¿$Ä¿BÄ:BÄd]ÄFÄÄ:BÄ:BÄ:BÄÃFÄÄjBÄà\ÄBÄmBÄ:\ÄBÄp\ÄÄí\ÄBÄïBÄoBÄ‡BÄ˛,êSelect a database command from a menu. A choose-variable-values window will be presented to get the arguments LMFL#!C(:HOST "SW-MFG" :BACKUP-DATE 2760540761. :SYSTEM-TYPE :LOGICAL :VERSION 1. :TYPE "XLD" :NAME "MACROS" :DIRECTORY ("RTMS-DIR") :SOURCE-PATTERN "( :DIRECTORY (\"RTMS-DIR\") :NAME :WILD :TYPE :WILD :VERSION :NEWEST)" :NOT-BACKED-UP T :CREATION-DATE 2760359691. :AUTHOR "REL3" :LENGTH-IN-BYTES 11689. :LENGTH-IN-BLOCKS 23. :BYTE-SIZE 16.)                                     pp2Ä\Ä©ÅCOMPILE-DATA\ÄÏÄSW-MFG,ÅGODZILLAÜÄá§ÕFÄFÄ\Äp¿,ÅCOMPILER,ÅVERSIONÄ\ÄFÄFÄp¿BÄ),ÇOPTIMIZE-SWITCHÄÜÄ©ÉQFASL-SOURCE-FILE-UNIQUE-IDÄ1Ä\Äp¿lÄFSÏÇMAKE-FASLOAD-PATHNAMEÄ\ÄÍÄQUOTEÄBÄ$\ÄBÄ8™ÄNILÄ\ÄBÄ8\Ä¨ÄRTMS\ÄBÄ8ÏÄMACROS\ÄBÄ8¨ÄLISP\ÄBÄ8FÄ©ÄBASEFÄ
-ÈÄFONTSÄ\Ä©Å*CODE-FONT*ÄÈÅ*COMMENT-FONT*ÈÅ*STRING-FONT*Ä)ÅPACKAGEÄ©ÄRTMS©ÄMODE©ÅCOMMON-LISPÄÄCÇABORT-TRANSACTION*ÄÎÄÜÄ$@FÄ¿$Ä¿BÄ:p¿¨ÄTICLÏÄART-QÄ]ÄFÄÄ:BÄ:BÄ:jÄTÄFÄp¿¨ÄSYSÄlÇDEBUG-INFO-STRUCTÄBÄP\Äp¿BÄ\lÅ*MACROARG*jÅ&OPTIONALÄp¿BÄ\lÇ*MACROENVIRONMENT*BÄ:BÄ:\Ä©ÅEXPR-SXHASHÄÜÄ&,*©ÇDESCRIPTIVE-ARGLISTÄ\ÄÍÄ&RESTÄÍÄIGNOREÄ\ÄCÇABORT-TRANSACTIONÄÄD¿p¿BÄTÏÄMACROÄBÄnOÄqBÄPÄÄÇACTIVE-DATABASE*ÄÎÄÜÄ$@FÄ
-¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄrBÄ_BÄ:BÄ:\ÄBÄfÜÄ
-åπBÄhBÄ:Äp¿BÄ\,ÉMACRO-REPORT-ARGS-ERRORÄ“\ÄÇACTIVE-DATABASEÄÄÄQJô‰ÄQJJòD¿BÄpBÄÄOÄÅBÄrÄÄCÅACTIVE-DB*ÄÎÄÜÄ$@FÄ
-¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄÇBÄ_BÄ:BÄ:\ÄBÄfÜÄ:FyBÄhBÄ:ÄBÄ}“\ÄBÄÄÄQJô‰ÄQJJòD¿BÄpBÄ
-OÄéBÄÇÄÄÉÄANDPÄÎÄÜÄ$@FÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄèBÄ_BÄ:BÄ:\ÄÄfÜÄV)ÇMACROS-EXPANDEDÄ\Äp¿BÄ\lÅXR-BQ-LISTp¿BÄ\¨ÅXR-BQ-LIST*ÄBÄh\ÄBÄjCÅPREDICATESÄÉÄAND*¿BÄ8¿™ÄLIST“\ÄBÄY¿ÍÄLIST*ÄíPPÄUíPúD¿BÄpBÄ•OÄ¶BÄèÄÄÇATTACH-RELATION*ÄÎÄ	ÜÄÑDFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄßBÄ_BÄ:\Ä√ÅRELATION-NAMEÄ\ÄÄfÜÄ"7¯BÄô\ÄBÄúBÄh\ÄBÄ∞BÄjÉÅKEYWORD-LISTÄBÄ}“ÇATTACH-RELATIONÄ¿BÄ8¿BÄ¢íÄQJôÊÄQJˇ€òÄW@¡PP@QíPÄYíúD¿BÄpBÄ∑OÄ∏BÄßÄÄÅAVERAGE*ÄÎÄÜÄÑHFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄπBÄ_BÄ:\ÄBÄ∞√ÅATTRIBUTE-NAME\ÄÄfÜÄJ{—BÄô\ÄBÄúBÄh\ÄBÄ∞BÄ¬BÄjBÄµÄBÄ}“ÅAVERAGEÄ¿BÄ8¿BÄ¢íÄQJôÊÄQJˇ€òÄW@¡Ä[A¡PP@QíPAQíPÄQBí§D¿BÄpBÄ»OÄ…BÄπÄÄCÇBEGIN-TRANSACTION*ÄÎÄÜÄ$@FÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄ BÄ_BÄ:BÄ:\ÄBÄfÜÄbﬁ|BÄh\ÄBÄjBÄkÄ\ÄCÇBEGIN-TRANSACTIONÄÄD¿BÄpBÄ◊OÄÿBÄ ÄÄÉÇCOMMIT-TRANSACTION*ÄÄÎÄ	ÜÄÑDFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄŸBÄ_BÄ:\ÄÉÅTRANSACTIONÄ\ÄÄfÜÄ~≠)BÄô\ÄBÄúBÄh\ÄBÄ‚BÄjBÄµÄBÄ}“CÇCOMMIT-TRANSACTION¿BÄ8¿BÄ¢íÄQJôÊÄQJˇ€òÄW@¡PP@QíPÄYíúD¿BÄpBÄËOÄÈBÄŸÄÄÉÅCOUNT-RTMS*ÄÄÎÄÜÄÑHFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄÍBÄ_BÄ:\ÄBÄ∞BÄ¬\ÄÄfÜÄJ[BÄô\ÄBÄúBÄh\ÄBÄ∞BÄ¬BÄjBÄµÄBÄ}“CÅCOUNT-RTMS¿BÄ8¿BÄ¢íÄQJôÊÄQJˇ€òÄW@¡Ä[A¡PP@QíPAQíPÄQBí§D¿BÄpBÄ¯OÄ˘BÄÍÄÄCÇDEFINE-ATTRIBUTE*ÄÄÎÄÜÄÑHFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄ˙BÄ_BÄ:\ÄÅRELATIONÅATTR-DES\ÄÄfÜÄ«êBÄô\ÄBÄúBÄh\ÄBÄBÄBÄjBÄµÄBÄ}“ÇDEFINE-ATTRIBUTE¿BÄ8¿BÄ¢íÄQJôÊÄQJˇ€òÄW@¡Ä[A¡PP@QíPAQíPÄQBí§D¿BÄpBÄ
-OÄBÄ˙ÄÄÅDEFATTR*ÄÎÄÜÄÑHFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄBÄ_BÄ:\ÄBÄBÄ\ÄÄfÜÄ&O¡BÄô\ÄBÄúBÄh\ÄBÄBÄBÄjBÄµÄBÄ}“BÄ	¿BÄ8¿BÄ¢íÄQJôÊÄQJˇ€òÄW@¡Ä[A¡PP@QíPAQíPÄQBí§D¿BÄpBÄOÄBÄÄÄ√ÄDEFDB*ÄÎÄ	ÜÄÑDFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄBÄ_BÄ:\ÄÅDB-NAMEÄ\ÄÄfÜÄ6Î‘BÄô\ÄBÄúBÄh\ÄBÄ$BÄjBÄµÄBÄ}“ÇDEFINE-DATABASEÄ¿BÄ8¿BÄ¢íÄQJôÊÄQJˇ€òÄW@¡PP@QíPÄYíúD¿BÄpBÄ*OÄ+BÄÄÄÇDEFINE-DATABASE*ÄÎÄ	ÜÄÑDFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄ,BÄ_BÄ:\ÄBÄ$\ÄÄfÜÄbîƒBÄô\ÄBÄúBÄh\ÄBÄ$BÄjBÄµÄBÄ}“BÄ)¿BÄ8¿BÄ¢íÄQJôÊÄQJˇ€òÄW@¡PP@QíPÄYíúD¿BÄpBÄ9OÄ:BÄ,ÄÄ√ÅDEFINE-DOMAIN*ÄÎÄ	ÜÄÑDFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄ;BÄ_BÄ:\ÄÉÅDOMAIN-NAMEÄ\ÄÄfÜÄ
-qÁBÄô\ÄBÄúBÄh\ÄBÄDBÄjBÄµÄBÄ}“√ÅDEFINE-DOMAINÄ¿BÄ8¿BÄ¢íÄQJôÊÄQJˇ€òÄW@¡PP@QíPÄYíúD¿BÄpBÄJOÄKBÄ;ÄÄÅDEFENV*ÄÄÎÄ	ÜÄÑDFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄLBÄ_BÄ:\ÄÇENVIRONMENT-NAME\ÄÄfÜÄ.Î∫BÄô\ÄBÄúBÄh\ÄBÄUBÄjBÄµÄBÄ}“CÇDEFINE-ENVIRONMENT¿BÄ8¿BÄ¢íÄQJôÊÄQJˇ€òÄW@¡PP@QíPÄYíúD¿BÄpBÄ[OÄ\BÄLÄÄÉÇDEFINE-ENVIRONMENT*ÄÄÎÄ	ÜÄÑDFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄ]BÄ_BÄ:\ÄBÄU\ÄÄfÜÄR~BÄô\ÄBÄúBÄh\ÄBÄUBÄjBÄµÄBÄ}“BÄZ¿BÄ8¿BÄ¢íÄQJôÊÄQJˇ€òÄW@¡PP@QíPÄYíúD¿BÄpBÄjOÄkBÄ]ÄÄ√ÇDEFINE-IMPLEMENTATION*ÄÎÄ	ÜÄÑDFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄlBÄ_BÄ:\ÄÉÇIMPLEMENTATION-NAMEÄ\ÄÄfÜÄn"BÄô\ÄBÄúBÄh\ÄBÄuBÄjBÄµÄBÄ}“√ÇDEFINE-IMPLEMENTATIONÄ¿BÄ8¿BÄ¢íÄQJôÊÄQJˇ€òÄW@¡PP@QíPÄYíúD¿BÄpBÄ{OÄ|BÄlÄÄ√ÅDEFINE-INDEX*ÄÄÎÄ	ÜÄÑDFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄ}BÄ_BÄ:\ÄBÄ\ÄÄfÜÄ~?ÎBÄô\ÄBÄúBÄh\ÄBÄBÄjBÄµÄBÄ}“ÉÅDEFINE-INDEX¿BÄ8¿BÄ¢íÄQJôÊÄQJˇ€òÄW@¡PP@QíPÄYíúD¿BÄpBÄãOÄåBÄ}ÄÄCÉDEFINE-STORAGE-STRUCTURE*ÄÄÎÄ	ÜÄÑDFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄ
-BÄ_BÄ:\Ä√ÇSTORAGE-STRUCTURE-NAME\ÄÄfÜÄå∑BÄô\ÄBÄúBÄh\ÄBÄñBÄjBÄµÄBÄ}“ÉDEFINE-STORAGE-STRUCTURE¿BÄ8¿BÄ¢íÄQJôÊÄQJˇ€òÄW@¡PP@QíPÄYíúD¿BÄpBÄúOÄùBÄ
-ÄÄÅDEFREL*ÄÄÎÄÜÄÑHFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄûBÄ_BÄ:\ÄBÄ∞ÉÇATTRIBUTE-DESCRIPTOR\ÄÄfÜÄ2h·BÄô\ÄBÄúBÄh\ÄBÄ∞BÄßBÄjBÄµÄBÄ}“ÇDEFINE-RELATIONÄ¿BÄ8¿BÄ¢íÄQJôÊÄQJˇ€òÄW@¡Ä[A¡PP@QíPAQíPÄQBí§D¿BÄpBÄ≠OÄÆBÄûÄÄÇDEFINE-RELATION*ÄÎÄÜÄÑHFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄØBÄ_BÄ:\ÄBÄ∞BÄß\ÄÄfÜÄ
-≠!BÄô\ÄBÄúBÄh\ÄBÄ∞BÄßBÄjBÄµÄBÄ}“BÄ¨¿BÄ8¿BÄ¢íÄQJôÊÄQJˇ€òÄW@¡Ä[A¡PP@QíPAQíPÄQBí§D¿BÄpBÄºOÄΩBÄØÄÄÉÇDEFINE-TRANSACTION*ÄÄÎÄÜÄÑHFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄæBÄ_BÄ:\ÄBÄ‚√ÄFORMSÄ\ÄÄfÜÄN©ÓBÄô\ÄBÄúBÄh\ÄBÄ‚BÄ«BÄjBÄµÄBÄ}“CÇDEFINE-TRANSACTION¿BÄ8¿BÄ¢íÄQJôÊÄQJˇ€òÄW@¡Ä[A¡PP@QíPAQíPÄQBí§D¿BÄpBÄÕOÄŒBÄæÄÄ√ÅDEFREL-RESTOREÄÎÄÜÄÑHFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄœBÄ_BÄ:\ÄBÄ∞BÄß\ÄÄfÜÄ:».BÄô\ÄBÄúBÄh\ÄBÄ∞BÄßBÄjBÄµÄBÄ}“ÇDEFREL-RESTORE*Ä¿BÄ8¿BÄ¢íÄQJôÊÄQJˇ€òÄW@¡Ä[A¡PP@QíPAQíPÄQBí§D¿BÄpBÄ›OÄﬁBÄœÄÄÅDEFVIEW*ÄÎÄÜÄÑDFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄﬂBÄ_BÄ:\ÄÅVIEWNAME\ÄÄfÜÄB@ÆBÄô\ÄBÄúBÄh\ÄBÄËÅVIEWDEFÄÄBÄ}“ÉÅDEFINE-VIEWÄ¿BÄ8¿BÄ¢íÄQJô‰ÄQJô‰ÄQJJòÄW@¡PP@QíPÄ[íúD¿BÄpBÄÔOÄBÄﬂÄÄÉÅDEFINE-VIEW*ÄÎÄÜÄÑDFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄÒBÄ_BÄ:\ÄBÄË\ÄÄfÜÄVs&BÄô\ÄBÄúBÄh\ÄBÄËBÄÌÄBÄ}“BÄÓ¿BÄ8¿BÄ¢íÄQJô‰ÄQJô‰ÄQJJòÄW@¡PP@QíPÄ[íúD¿BÄpBÄ˛OÄˇBÄÒÄÄ√ÅDELETE-TUPLES*ÄÎÄ	ÜÄÑDFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄBÄ_BÄ:\ÄBÄ\ÄÄfÜÄ~ﬂ◊BÄô\ÄBÄúBÄh\ÄBÄBÄjBÄµÄBÄ}“√ÅDELETE-TUPLESÄ¿BÄ8¿BÄ¢íÄQJôÊÄQJˇ€òÄW@¡PP@QíPÄYíúD¿BÄpBÄOÄBÄÄÄ√ÅDESTROY-ATTR*ÄÄÎÄ	ÜÄÑDFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄBÄ_BÄ:\ÄBÄ\ÄÄfÜÄzLBÄô\ÄBÄúBÄh\ÄBÄBÄjBÄµÄBÄ}“CÇDESTROY-ATTRIBUTEÄ¿BÄ8¿BÄ¢íÄQJôÊÄQJˇ€òÄW@¡PP@QíPÄYíúD¿BÄpBÄOÄBÄÄÄCÇDESTROY-ATTRIBUTE*ÄÎÄ	ÜÄÑDFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄ BÄ_BÄ:\ÄBÄ\ÄÄfÜÄ~?QBÄô\ÄBÄúBÄh\ÄBÄBÄjBÄµÄBÄ}“BÄ¿BÄ8¿BÄ¢íÄQJôÊÄQJˇ€òÄW@¡PP@QíPÄYíúD¿BÄpBÄ-OÄ.BÄ ÄÄÉÅDESTROY-DB*ÄÄÎÄ	ÜÄÑDFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄ/BÄ_BÄ:\ÄBÄ$\ÄÄfÜÄ
-{VBÄô\ÄBÄúBÄh\ÄBÄ$BÄjBÄµÄBÄ}“ÇDESTROY-DATABASE¿BÄ8¿BÄ¢íÄQJôÊÄQJˇ€òÄW@¡PP@QíPÄYíúD¿BÄpBÄ=OÄ>BÄ/ÄÄCÇDESTROY-DATABASE*ÄÄÎÄ	ÜÄÑDFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄ?BÄ_BÄ:\ÄBÄ$\ÄÄfÜÄbt6BÄô\ÄBÄúBÄh\ÄBÄ$BÄjBÄµÄBÄ}“BÄ<¿BÄ8¿BÄ¢íÄQJôÊÄQJˇ€òÄW@¡PP@QíPÄYíúD¿BÄpBÄLOÄMBÄ?ÄÄÇDESTROY-DOMAIN*ÄÄÎÄ	ÜÄ$@FÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄNBÄ_BÄ:BÄ:\ÄÄfÜÄ~îøBÄô\ÄBÄúBÄh\ÄBÄDÄBÄ}“√ÅDESTROY-DOMAIN¿BÄ8¿BÄ¢íÄQJô‰ÄQJô‰ÄQJJòPPÄWíîD¿BÄpBÄ[OÄ\BÄNÄÄÉDESTROY-IMPLEMENTATION*ÄÄÎÄ	ÜÄ$@FÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄ]BÄ_BÄ:BÄ:\ÄÄfÜÄ„BÄô\ÄBÄúBÄh\ÄBÄuÄBÄ}“√ÇDESTROY-IMPLEMENTATION¿BÄ8¿BÄ¢íÄQJô‰ÄQJô‰ÄQJJòPPÄWíîD¿BÄpBÄjOÄkBÄ]ÄÄ√ÅDESTROY-INDEX*ÄÎÄÜÄÑHFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄlBÄ_BÄ:\ÄBÄ∞CÅINDEX-NAME\ÄÄfÜÄ&∑BÄô\ÄBÄúBÄh\ÄBÄ∞BÄuBÄjBÄµÄBÄ}“√ÅDESTROY-INDEXÄ¿BÄ8¿BÄ¢íÄQJôÊÄQJˇ€òÄW@¡Ä[A¡PP@QíPAQíPÄQBí§D¿BÄpBÄ{OÄ|BÄlÄÄCÇDESTROY-RELATION*ÄÄÎÄ	ÜÄÑDFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄ}BÄ_BÄ:\ÄBÄ∞\ÄÄfÜÄ"◊ÍBÄô\ÄBÄúBÄh\ÄBÄ∞BÄjBÄµÄBÄ}“ÇDESTROY-RELATION¿BÄ8¿BÄ¢íÄQJôÊÄQJˇ€òÄW@¡PP@QíPÄYíúD¿BÄpBÄãOÄåBÄ}ÄÄÉÅDESTROY-REL*ÄÎÄ	ÜÄÑDFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄ
-BÄ_BÄ:\ÄBÄ∞\ÄÄfÜÄvkBÄô\ÄBÄúBÄh\ÄBÄ∞BÄjBÄµÄBÄ}“BÄä¿BÄ8¿BÄ¢íÄQJôÊÄQJˇ€òÄW@¡PP@QíPÄYíúD¿BÄpBÄöOÄõBÄ
-ÄÄCÉDESTROY-STORAGE-STRUCTURE*ÄÎÄ	ÜÄ$@FÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄúBÄ_BÄ:BÄ:\ÄÄfÜÄfI€BÄô\ÄBÄúBÄh\ÄBÄñÄBÄ}“CÉDESTROY-STORAGE-STRUCTUREÄ¿BÄ8¿BÄ¢íÄQJô‰ÄQJô‰ÄQJJòPPÄWíîD¿BÄpBÄ©OÄ™BÄúÄÄ√ÅDESTROY-VIEW*ÄÄÎÄ	ÜÄ$@FÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄ´BÄ_BÄ:BÄ:\ÄÄfÜÄ:O†BÄô\ÄBÄúBÄh\ÄCÅVIEW-NAMEÄÄBÄ}“ÉÅDESTROY-VIEW¿BÄ8¿BÄ¢íÄQJô‰ÄQJô‰ÄQJJòPPÄWíîD¿BÄpBÄπOÄ∫BÄ´ÄÄCÅDESCRIBE*ÄÄÎÄÜÄÑDFÄ
-¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄªBÄ_BÄ:\Ä√ÄOBJECT\ÄÄfÜÄZ„xBÄô\ÄBÄúBÄh\ÄBÄbBÄƒBÄjBÄkÄÉÄHELP¿BÄ8¿BÄ¢íÄW@¡PP@QíîD¿BÄpBÄ OÄÀBÄªÄÄÇDETACH-RELATION*ÄÎÄ	ÜÄÑDFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄÃBÄ_BÄ:\ÄBÄ∞\ÄÄfÜÄ"7¯BÄô\ÄBÄúBÄh\ÄBÄ∞BÄjBÄµÄBÄ}“ÇDETACH-RELATIONÄ¿BÄ8¿BÄ¢íÄQJôÊÄQJˇ€òÄW@¡PP@QíPÄYíúD¿BÄpBÄ⁄OÄ€BÄÃÄÄÇEND-TRANSACTION*ÄÎÄÜÄ$@FÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄ‹BÄ_BÄ:BÄ:\ÄBÄfÜÄFgBÄh\ÄBÄjBÄkÄ\ÄÇEND-TRANSACTIONÄÄD¿BÄpBÄÈOÄÍBÄ‹ÄÄÅENVSTAT*ÄÎÄÜÄ$@FÄ
-¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄÎBÄ_BÄ:BÄ:\ÄBÄfÜÄﬁjBÄhBÄ:ÄBÄ}“CÇENVIRONMENT-STATUSíÄQJô‰ÄQJJòÑD¿BÄpBÄˆOÄ˜BÄÎÄÄÉÇENVIRONMENT-STATUS*ÄÄÎÄÜÄ$@FÄ
-¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄ¯BÄ_BÄ:BÄ:\ÄBÄfÜÄ&ÖöBÄhBÄ:ÄBÄ}“BÄıíÄQJô‰ÄQJJòÑD¿BÄpBÄOÄBÄ¯ÄÄÅEQUALP*ÄÄÎÄÜÄ$@FÄ	¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄBÄ_BÄ:BÄ:\ÄÄfÜÄ::&BÄô\ÄBÄúBÄh\ÄBÄj√ÄITEMSÄÄÅ*EQUALPÄ¿BÄ8¿BÄ¢íPPÄUíîD¿BÄpBÄOÄBÄÄÄÉÄGEP*ÄÎÄÜÄ$@FÄ	¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄBÄ_BÄ:BÄ:\ÄÄfÜÄÚVBÄô\ÄBÄúBÄh\ÄBÄjBÄÄÉÄGEPÄ¿BÄ8¿BÄ¢íPPÄUíîD¿BÄpBÄ!OÄ"BÄÄÄÉÄGTP*ÄÎÄÜÄ$@FÄ	¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄ#BÄ_BÄ:BÄ:\ÄÄfÜÄcFBÄô\ÄBÄúBÄh\ÄBÄjBÄÄÉÄGTPÄ¿BÄ8¿BÄ¢íPPÄUíîD¿BÄpBÄ0OÄ1BÄ#ÄÄ√ÄHELP*ÄÄÎÄÜÄÑDFÄ
-¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄ2BÄ_BÄ:\ÄBÄƒ\ÄÄfÜÄvLABÄô\ÄBÄúBÄh\ÄBÄbBÄƒBÄjBÄkÄBÄ…¿BÄ8¿BÄ¢íÄW@¡PP@QíîD¿BÄpBÄ?OÄ@BÄ2ÄÄÅINSERT*ÄÄÎÄ	ÜÄÑDFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄABÄ_BÄ:\ÄBÄ\ÄÄfÜÄ~ﬂôBÄô\ÄBÄúBÄh\ÄBÄBÄjBÄµÄBÄ}“√ÄINSERT¿BÄ8¿BÄ¢íÄQJôÊÄQJˇ€òÄW@¡PP@QíPÄYíúD¿BÄpBÄOOÄPBÄAÄÄ√ÅINSERT-TUPLES*ÄÎÄ	ÜÄÑDFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄQBÄ_BÄ:\ÄBÄ\ÄÄfÜÄïHBÄô\ÄBÄúBÄh\ÄBÄBÄjBÄµÄBÄ}“BÄN¿BÄ8¿BÄ¢íÄQJôÊÄQJˇ€òÄW@¡PP@QíPÄYíúD¿BÄpBÄ^OÄ_BÄQÄÄ√ÄJOIN*ÄÄÎÄÜÄ$@FÄ	¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄ`BÄ_BÄ:BÄ:\ÄÄfÜÄ:KBÄô\ÄBÄúBÄh\ÄBÄjBÄµÄÉÄJOIN¿BÄ8¿BÄ¢íPPÄUíîD¿BÄpBÄmOÄnBÄ`ÄÄÉÄLEP*ÄÎÄÜÄ$@FÄ	¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄoBÄ_BÄ:BÄ:\ÄÄfÜÄrﬂBÄô\ÄBÄúBÄh\ÄBÄjBÄÄÉÄLEPÄ¿BÄ8¿BÄ¢íPPÄUíîD¿BÄpBÄ|OÄ}BÄoÄÄÉÄLTP*ÄÎÄÜÄ$@FÄ	¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄ~BÄ_BÄ:BÄ:\ÄÄfÜÄ„œBÄô\ÄBÄúBÄh\ÄBÄjBÄÄÉÄLTPÄ¿BÄ8¿BÄ¢íPPÄUíîD¿BÄpBÄãOÄåBÄ~ÄÄÅLOADDB*ÄÄÎÄ	ÜÄÑDFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄ
-BÄ_BÄ:\Ä√ÄDBNAME\ÄÄfÜÄZ\0BÄô\ÄBÄúBÄh\ÄBÄñBÄjBÄµÄBÄ}“√ÅLOAD-DATABASEÄ¿BÄ8¿BÄ¢íÄQJôÊÄQJˇ€òÄW@¡PP@QíPÄYíúD¿BÄpBÄúOÄùBÄ
-ÄÄ√ÅLOAD-DATABASE*ÄÎÄ	ÜÄÑDFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄûBÄ_BÄ:\ÄBÄñ\ÄÄfÜÄZB°BÄô\ÄBÄúBÄh\ÄBÄñBÄjBÄµÄBÄ}“BÄõ¿BÄ8¿BÄ¢íÄQJôÊÄQJˇ€òÄW@¡PP@QíPÄYíúD¿BÄpBÄ´OÄ¨BÄûÄÄCÅLOAD-ENV*ÄÄÎÄ	ÜÄÑDFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄ≠BÄ_BÄ:\ÄÅENVNAMEÄ\ÄÄfÜÄ6v®BÄô\ÄBÄúBÄh\ÄBÄ∂BÄjBÄµÄBÄ}“ÇLOAD-ENVIRONMENT¿BÄ8¿BÄ¢íÄQJôÊÄQJˇ€òÄW@¡PP@QíPÄYíúD¿BÄpBÄºOÄΩBÄ≠ÄÄCÇLOAD-ENVIRONMENT*ÄÄÎÄ	ÜÄÑDFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄæBÄ_BÄ:\ÄBÄ∂\ÄÄfÜÄYXBÄô\ÄBÄúBÄh\ÄBÄ∂BÄjBÄµÄBÄ}“BÄª¿BÄ8¿BÄ¢íÄQJôÊÄQJˇ€òÄW@¡PP@QíPÄYíúD¿BÄpBÄÀOÄÃBÄæÄÄCÅLOAD-REL*ÄÄÎÄ	ÜÄÑDFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄÕBÄ_BÄ:\ÄBÄ∞\ÄÄfÜÄrb©BÄô\ÄBÄúBÄh\ÄBÄ∞BÄjBÄµÄBÄ}“√ÅLOAD-RELATIONÄ¿BÄ8¿BÄ¢íÄQJôÊÄQJˇ€òÄW@¡PP@QíPÄYíúD¿BÄpBÄ€OÄ‹BÄÕÄÄ√ÅLOAD-RELATION*ÄÎÄ	ÜÄÑDFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄ›BÄ_BÄ:\ÄBÄ∞\ÄÄfÜÄ"˜xBÄô\ÄBÄúBÄh\ÄBÄ∞BÄjBÄµÄBÄ}“BÄ⁄¿BÄ8¿BÄ¢íÄQJôÊÄQJˇ€òÄW@¡PP@QíPÄYíúD¿BÄpBÄÍOÄÎBÄ›ÄÄCÅMAPTUPLE*ÄÄÎÄÜÄÑDFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄÏBÄ_BÄ:\ÄCÅDBFUNCTION\ÄÄfÜÄBy˜BÄô\ÄBÄúBÄh\ÄBÄıBÄ∞ÄBÄ}“ÅMAPTUPLE¿BÄ8¿BÄ¢íÄQJô‰ÄQJô‰ÄQJJòÄW@¡PP@QíPÄ[íúD¿BÄpBÄ˚OÄ¸BÄÏÄÄ√ÄMAPT*ÄÄÎÄÜÄÑDFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄ˝BÄ_BÄ:\ÄBÄı\ÄÄfÜÄBπ•BÄô\ÄBÄúBÄh\ÄBÄıBÄ∞ÄBÄ}“ÉÄMAPT¿BÄ8¿BÄ¢íÄQJô‰ÄQJô‰ÄQJJòÄW@¡PP@QíPÄ[íúD¿BÄpBÄOÄBÄ˝ÄÄÅMODIFY*ÄÄÎÄ	ÜÄÑDFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄBÄ_BÄ:\ÄBÄ\ÄÄfÜÄ~ﬂÎBÄô\ÄBÄúBÄh\ÄBÄBÄjBÄµÄBÄ}“√ÄMODIFY¿BÄ8¿BÄ¢íÄQJôÊÄQJˇ€òÄW@¡PP@QíPÄYíúD¿BÄpBÄOÄBÄÄÄCÇMODIFY-ATTRIBUTE*ÄÄÎÄÜÄÑHFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄBÄ_BÄ:\ÄBÄCÅATTRIBUTEÄ\ÄÄfÜÄ~fÄô\ÄBÄúBÄh\ÄBÄBÄ&BÄjBÄµÄBÄ}“ÇMODIFY-ATTRIBUTE¿BÄ8¿BÄ¢íÄQJôÊÄQJˇ€òÄW@¡Ä[A¡PP@QíPAQíPÄQBí§D¿BÄpBÄ,OÄ-BÄÄÄÇMODIFY-DATABASE*ÄÎÄ	ÜÄÑDFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄ.BÄ_BÄ:\ÄÅDATABASE\ÄÄfÜÄ::yBÄô\ÄBÄúBÄh\ÄBÄ7BÄjBÄµÄBÄ}“ÇMODIFY-DATABASEÄ¿BÄ8¿BÄ¢íÄQJôÊÄQJˇ€òÄW@¡PP@QíPÄYíúD¿BÄpBÄ=OÄ>BÄ.ÄÄÇMODIFY-RELATION*ÄÎÄ	ÜÄÑDFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄ?BÄ_BÄ:\ÄBÄ\ÄÄfÜÄ~≥BÄô\ÄBÄúBÄh\ÄBÄBÄjBÄµÄBÄ}“ÇMODIFY-RELATIONÄ¿BÄ8¿BÄ¢íÄQJôÊÄQJˇ€òÄW@¡PP@QíPÄYíúD¿BÄpBÄMOÄNBÄ?ÄÄ√ÅMODIFY-DOMAIN*ÄÎÄ	ÜÄÑDFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄOBÄ_BÄ:\ÄBÄD\ÄÄfÜÄ
-ëOBÄô\ÄBÄúBÄh\ÄBÄDBÄjBÄµÄBÄ}“√ÅMODIFY-DOMAINÄ¿BÄ8¿BÄ¢íÄQJôÊÄQJˇ€òÄW@¡PP@QíPÄYíúD¿BÄpBÄ]OÄ^BÄOÄÄÉÇMODIFY-TRANSACTION*ÄÄÎÄ	ÜÄÑDFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄ_BÄ_BÄ:\ÄBÄ‚\ÄÄfÜÄ~≠cBÄô\ÄBÄúBÄh\ÄBÄ‚BÄjBÄµÄBÄ}“CÇMODIFY-TRANSACTION¿BÄ8¿BÄ¢íÄQJôÊÄQJˇ€òÄW@¡PP@QíPÄYíúD¿BÄpBÄmOÄnBÄ_ÄÄ√ÅMODIFY-TUPLES*ÄÎÄ	ÜÄÑDFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄoBÄ_BÄ:\ÄBÄ\ÄÄfÜÄRµ BÄô\ÄBÄúBÄh\ÄBÄBÄjBÄµÄBÄ}“BÄ¿BÄ8¿BÄ¢íÄQJôÊÄQJˇ€òÄW@¡PP@QíPÄYíúD¿BÄpBÄ|OÄ}BÄoÄÄÉÅMODIFY-VIEW*ÄÎÄ	ÜÄÑDFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄ~BÄ_BÄ:\ÄBÄ∑\ÄÄfÜÄNjjBÄô\ÄBÄúBÄh\ÄBÄ∑BÄjBÄµÄBÄ}“ÉÅMODIFY-VIEWÄ¿BÄ8¿BÄ¢íÄQJôÊÄQJˇ€òÄW@¡PP@QíPÄYíúD¿BÄpBÄåOÄ
-BÄ~ÄÄÅMAXIMUM*ÄÎÄÜÄÑHFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄéBÄ_BÄ:\ÄBÄ∞BÄ¬\ÄÄfÜÄJªBÄô\ÄBÄúBÄh\ÄBÄ∞BÄ¬BÄjBÄµÄBÄ}“ÅMAXIMUMÄ¿BÄ8¿BÄ¢íÄQJôÊÄQJˇ€òÄW@¡Ä[A¡PP@QíPAQíPÄQBí§D¿BÄpBÄúOÄùBÄéÄÄÅMINIMUM*ÄÎÄÜÄÑHFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄûBÄ_BÄ:\ÄBÄ∞BÄ¬\ÄÄfÜÄJ[¡BÄô\ÄBÄúBÄh\ÄBÄ∞BÄ¬BÄjBÄµÄBÄ}“ÅMINIMUMÄ¿BÄ8¿BÄ¢íÄQJôÊÄQJˇ€òÄW@¡Ä[A¡PP@QíPAQíPÄQBí§D¿BÄpBÄ¨OÄ≠BÄûÄÄ√ÄNOTP*ÄÄÎÄÜÄ$@FÄ	¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄÆBÄ_BÄ:BÄ:\ÄÄfÜÄ2kNBÄô\ÄBÄúBÄh\ÄBÄjBÄÄÉÄNOTP¿BÄ8¿BÄ¢íPPÄUíîD¿BÄpBÄªOÄºBÄÆÄÄCÅPRINTREL*ÄÄÎÄ	ÜÄÑDFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄΩBÄ_BÄ:\ÄBÄ\ÄÄfÜÄ¯BÄô\ÄBÄúBÄh\ÄBÄBÄjBÄµÄBÄ}“√ÅPRINT-RELATION¿BÄ8¿BÄ¢íÄQJôÊÄQJˇ€òÄW@¡PP@QíPÄYíúD¿BÄpBÄÀOÄÃBÄΩÄÄÇPRINT-RELATION*ÄÄÎÄ	ÜÄÑDFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄÕBÄ_BÄ:\ÄBÄ\ÄÄfÜÄ~?ìBÄô\ÄBÄúBÄh\ÄBÄBÄjBÄµÄBÄ}“BÄ ¿BÄ8¿BÄ¢íÄQJôÊÄQJˇ€òÄW@¡PP@QíPÄYíúD¿BÄpBÄ⁄OÄ€BÄÕÄÄÅPROJECT*ÄÎÄ	ÜÄÑDFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄ‹BÄ_BÄ:\ÄBÄ∞\ÄÄfÜÄ"◊"BÄô\ÄBÄúBÄh\ÄBÄ∞BÄjBÄµÄBÄ}“ÅPROJECTÄ¿BÄ8¿BÄ¢íÄQJôÊÄQJˇ€òÄW@¡PP@QíPÄYíúD¿BÄpBÄÍOÄÎBÄ‹ÄÄCÄRÄÄÎÄ	ÜÄÑDFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄÏBÄ_BÄ:\ÄBÄ∞\ÄÄfÜÄ
-ˇBÄô\ÄBÄúBÄh\ÄBÄ∞BÄjBÄµÄBÄ}“ÅRETRIEVE¿BÄ8¿BÄ¢íÄQJôÊÄQJˇ€òÄW@¡PP@QíPÄYíúD¿BÄpBÄ˙OÄ˚BÄÏÄÄÉÇRELATION-DIFFERENCE*ÄÎÄÜÄ$@FÄ	¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄ¸BÄ_BÄ:BÄ:\ÄÄfÜÄZ@‰BÄô\ÄBÄúBÄh\ÄBÄjBÄµÄÉÇRELATION-DIFFERENCEÄ¿BÄ8¿BÄ¢íPPÄUíîD¿BÄpBÄ	OÄ
-BÄ¸ÄÄ√ÇRELATION-INTERSECTION*ÄÎÄÜÄ$@FÄ	¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄBÄ_BÄ:BÄ:\ÄÄfÜÄ”îBÄô\ÄBÄúBÄh\ÄBÄjBÄµÄ√ÇRELATION-INTERSECTIONÄ¿BÄ8¿BÄ¢íPPÄUíîD¿BÄpBÄOÄBÄÄÄÇRELATION-UNION*ÄÄÎÄÜÄ$@FÄ	¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄBÄ_BÄ:BÄ:\ÄÄfÜÄFÎÙBÄô\ÄBÄúBÄh\ÄBÄjBÄµÄ√ÅRELATION-UNION¿BÄ8¿BÄ¢íPPÄUíîD¿BÄpBÄ'OÄ(BÄÄÄÉÅRENAME-ATTR*ÄÎÄ	ÜÄÑDFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄ)BÄ_BÄ:\ÄBÄ∞\ÄÄfÜÄ
-bºBÄô\ÄBÄúBÄh\ÄBÄ∞BÄjCÅATTRIBUTESÄBÄ}“ÇRENAME-ATTRIBUTE¿BÄ8¿BÄ¢íÄQJôÊÄQJˇ€òÄW@¡PP@QíPÄYíúD¿BÄpBÄ8OÄ9BÄ)ÄÄCÇRENAME-ATTRIBUTE*ÄÄÎÄ	ÜÄÑDFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄ:BÄ_BÄ:\ÄBÄ∞\ÄÄfÜÄ"≠-BÄô\ÄBÄúBÄh\ÄBÄ∞BÄjBÄ6ÄBÄ}“BÄ7¿BÄ8¿BÄ¢íÄQJôÊÄQJˇ€òÄW@¡PP@QíPÄYíúD¿BÄpBÄGOÄHBÄ:ÄÄÇRENAME-DATABASE*ÄÎÄÜÄ$@FÄ	¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄIBÄ_BÄ:BÄ:\ÄÄfÜÄnaÊBÄô\ÄBÄúBÄh\ÄBÄjCÅDATABASESÄÄÇRENAME-DATABASEÄ¿BÄ8¿BÄ¢íPPÄUíîD¿BÄpBÄWOÄXBÄIÄÄCÅRENAME-DB*ÄÎÄÜÄ$@FÄ	¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄYBÄ_BÄ:BÄ:\ÄÄfÜÄj\œBÄô\ÄBÄúBÄh\ÄBÄjBÄUÄBÄV¿BÄ8¿BÄ¢íPPÄUíîD¿BÄpBÄeOÄfBÄYÄÄÇRENAME-RELATION*ÄÎÄÜÄ$@FÄ	¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄgBÄ_BÄ:BÄ:\ÄÄfÜÄ
-*IBÄô\ÄBÄúBÄh\ÄBÄjCÅRELATIONSÄÄÇRENAME-RELATIONÄ¿BÄ8¿BÄ¢íPPÄUíîD¿BÄpBÄuOÄvBÄgÄÄÉÅRENAME-REL*ÄÄÎÄÜÄ$@FÄ	¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄwBÄ_BÄ:BÄ:\ÄÄfÜÄ."ëBÄô\ÄBÄúBÄh\ÄBÄjBÄsÄBÄt¿BÄ8¿BÄ¢íPPÄUíîD¿BÄpBÄÉOÄÑBÄwÄÄCÅRETRIEVE*ÄÄÎÄ	ÜÄÑDFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄÖBÄ_BÄ:\ÄBÄ∞\ÄÄfÜÄ"7`BÄô\ÄBÄúBÄh\ÄBÄ∞BÄjBÄµÄBÄ}“BÄ˘¿BÄ8¿BÄ¢íÄQJôÊÄQJˇ€òÄW@¡PP@QíPÄYíúD¿BÄpBÄíOÄìBÄÖÄÄÉÅRTMS-COUNT*ÄÄÎÄÜÄÑHFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄîBÄ_BÄ:\ÄBÄ∞BÄ¬\ÄÄfÜÄv_BÄô\ÄBÄúBÄh\ÄBÄ∞BÄ¬BÄjBÄµÄBÄ}“BÄ˜¿BÄ8¿BÄ¢íÄQJôÊÄQJˇ€òÄW@¡Ä[A¡PP@QíPAQíPÄQBí§D¿BÄpBÄ°OÄ¢BÄîÄÄÅSAVE-DB*ÄÎÄÜÄÑDFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄ£BÄ_BÄ:\ÄBÄñ\ÄÄfÜÄ&”,BÄô\ÄBÄúBÄh\ÄBÄb\ÄBÄñÉÅ*ACTIVE-DB*ÄBÄjBÄµÄBÄ±ë√ÅSAVE-DATABASEÄ¿BÄ8¿BÄ¢íÄ‰ÄW¸P@¡PP@QíPÄYíúD¿BÄpBÄ≥OÄ¥BÄ£ÄÄ√ÅSAVE-DATABASE*ÄÎÄÜÄÑDFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄµBÄ_BÄ:\ÄBÄñ\ÄÄfÜÄôBÄô\ÄBÄúBÄh\ÄBÄb\ÄBÄñBÄ±BÄjBÄµÄBÄ±ëBÄ≤¿BÄ8¿BÄ¢íÄ‰ÄW¸P@¡PP@QíPÄYíúD¿BÄpBÄ√OÄƒBÄµÄÄCÅSAVE-ENV*ÄÄÎÄÜÄÑDFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄ≈BÄ_BÄ:\ÄBÄ∂\ÄÄfÜÄTBÄô\ÄBÄúBÄh\ÄBÄb\ÄBÄ∂CÇ*ENVIRONMENT-NAME*BÄjBÄµÄBÄ”ëÇSAVE-ENVIRONMENT¿BÄ8¿BÄ¢íÄ‰ÄW¸P@¡PP@QíPÄYíúD¿BÄpBÄ’OÄ÷BÄ≈ÄÄCÇSAVE-ENVIRONMENT*ÄÄÎÄÜÄÑDFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄ◊BÄ_BÄ:\ÄBÄ∂\ÄÄfÜÄ*l¬BÄô\ÄBÄúBÄh\ÄBÄb\ÄBÄ∂BÄ”BÄjBÄµÄBÄ”ëBÄ‘¿BÄ8¿BÄ¢íÄ‰ÄW¸P@¡PP@QíPÄYíúD¿BÄpBÄÂOÄÊBÄ◊ÄÄCÅSAVE-REL*ÄÄÎÄ	ÜÄÑDFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄÁBÄ_BÄ:\ÄBÄ∞\ÄÄfÜÄH®BÄô\ÄBÄúBÄh\ÄBÄ∞BÄjBÄµÄBÄ}“√ÅSAVE-RELATIONÄ¿BÄ8¿BÄ¢íÄQJôÊÄQJˇ€òÄW@¡PP@QíPÄYíúD¿BÄpBÄıOÄˆBÄÁÄÄ√ÅSAVE-RELATION*ÄÎÄ	ÜÄÑDFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄ˜BÄ_BÄ:\ÄBÄ∞\ÄÄfÜÄ"7ËBÄô\ÄBÄúBÄh\ÄBÄ∞BÄjBÄµÄBÄ}“BÄÙ¿BÄ8¿BÄ¢íÄQJôÊÄQJˇ€òÄW@¡PP@QíPÄYíúD¿BÄpBÄOÄÄ˜ÄÄCÇSAVE-TRANSACTION*ÄÄÎÄ	ÜÄÑDFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄÄ_BÄ:\ÄÇTRANSACTION-NAME\ÄÄfÜÄFØ∞BÄô\ÄBÄúBÄh\ÄBÄÄjBÄµÄBÄ}“ÇSAVE-TRANSACTION¿BÄ8¿BÄ¢íÄQJôÊÄQJˇ€òÄW@¡PP@QíPÄYíúD¿BÄpBÄOÄÄÄÄ√ÅSELECT-TUPLES*ÄÎÄ	ÜÄÑDFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄÄ_BÄ:\ÄBÄ∞\ÄÄfÜÄ"˜∫BÄô\ÄBÄúBÄh\ÄBÄ∞BÄjBÄµÄBÄ}“√ÅSELECT-TUPLESÄ¿BÄ8¿BÄ¢íÄQJôÊÄQJˇ€òÄW@¡PP@QíPÄYíúD¿BÄpBÄ%OÄ&ÄÄÄÉÄSUM*ÄÎÄÜÄÑHFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄ'Ä_BÄ:\ÄBÄ∞BÄ¬\ÄÄfÜÄJªïBÄô\ÄBÄúBÄh\ÄBÄ∞BÄ¬BÄjBÄµÄBÄ}“ÉÄSUMÄ¿BÄ8¿BÄ¢íÄQJôÊÄQJˇ€òÄW@¡Ä[A¡PP@QíPAQíPÄQBí§D¿BÄpBÄ5OÄ6Ä'ÄÄ√ÄSIZE*ÄÄÎÄ	ÜÄÑDFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄ7Ä_BÄ:\ÄBÄ∞\ÄÄfÜÄ"7äBÄô\ÄBÄúBÄh\ÄBÄ∞BÄjBÄµÄBÄ}“ÉÄSIZE¿BÄ8¿BÄ¢íÄQJôÊÄQJˇ€òÄW@¡PP@QíPÄYíúD¿BÄpBÄEOÄFÄ7Ä1Ä\Äp¿BÄ\,ÑFASL-RECORD-FILE-MACROS-EXPANDED\ÄBÄ8\Ä\Ä*ÅDEFMACROÜÄ;√∫\ÄBÄûÜÄN¶™\ÄBÄúÜÄ.ŸãÄÄBÄBÄBÄBÄBÄBÄBÄBÄ˙BÄ	BÄBÄBÄBÄBÄˇBÄ˝BÄ˚BÄÓBÄ¯BÄˆBÄ˜BÄÛBÄÚBÄBÄÔBÄÌBÄÎBÄÈBÄÄÄFÄ#¿BÄ¿BÄ¿BÄ¿BÄ¿BÄ¿BÄ¿BÄ¿BÄ¿BÄLMFL#!C(:HOST "SW-MFG" :BACKUP-DATE 2760540764. :SYSTEM-TYPE :LOGICAL :VERSION 1. :TYPE "LISP" :NAME "MISC-INTERNAL" :DIRECTORY ("RTMS-DIR") :SOURCE-PATTERN "( :DIRECTORY (\"RTMS-DIR\") :NAME :WILD :TYPE :WILD :VERSION :NEWEST)" :CHARACTERS T :NOT-BACKED-UP T :CREATION-DATE 2749846239. :AUTHOR "REL3" :LENGTH-IN-BYTES 7201. :LENGTH-IN-BLOCKS 8. :BYTE-SIZE 8.)
-
-;;; -*- Mode:Common-Lisp; Package:RTMS; Fonts:(*CODE-FONT* *COMMENT-FONT* *STRING-FONT*); Base:10 -*-
-;;; Copyright (c) by Texas Instruments, Incorporated
-;;; All rights reserved
-;;; MISC-INTERNAL
-(defun add-dot (relation attribute)
-  (read-from-string (concatenate 'string (string-upcase relation) "." attribute)))
-
-(defun commit-system-relation (&aux insert-name qtrieve-var)
-  (cond ((> (length (getp 'system-relation 'commit-tuples)) 0)
- (setf insert-name (string-upcase (concatenate 'string "INSERT-" *system-relation-base-implementation*
-     "-" *system-relation-storage-structure*)))
-
- ;;
- ;;  Insert the tuples into the SYSTEM-RELATION relation
- ;;
- (funcall (find-symbol insert-name *pkg-string*) 'system-relation *system-relation-attributes*
-  (getp 'system-relation 'commit-tuples) *system-relation-key* 'system-relation)
- (setf qtrieve-var (caar (qtrieve 'system-relation *system-relation-attributes* '("CARDINALITY")
-    *system-relation-key*
-    (list 'string-equal 'relation-name "SYSTEM-RELATION"))))
- (delete-or-modify 'system-relation t (list 'string-equal 'relation-name "SYSTEM-RELATION")
-   '("MODIFIEDP" "CARDINALITY")
-   (list t (+ qtrieve-var (length (getp 'system-relation 'commit-tuples)))))))
-  ;;
-  ;;  Insert the tuples into the SYSTEM-ATTRIBUTE relation
-  ;;
-  (cond ((> (length (getp 'system-attribute 'commit-tuples)) 0)
- (funcall (find-symbol insert-name *pkg-string*) 'system-attribute *system-attribute-attributes*
-  (getp 'system-attribute 'commit-tuples) *system-attribute-key* 'system-attribute)
- (setf qtrieve-var (caar (qtrieve 'system-relation *system-relation-attributes* '("CARDINALITY")
-    *system-relation-key*
-    (list 'string-equal 'relation-name "SYSTEM-ATTRIBUTE"))))
- (delete-or-modify 'system-relation t (list 'string-equal 'relation-name "SYSTEM-ATTRIBUTE")
-   '("MODIFIEDP" "CARDINALITY")
-   (list t (+ qtrieve-var (length (getp 'system-attribute 'commit-tuples)))))))
-  ;;
-  ;;  Insert the tuples into the SYSTEM-OPTFUNC relation
-  ;;
-  (cond ((> (length (getp 'system-optfunc 'commit-tuples)) 0)
- (funcall (find-symbol insert-name *pkg-string*) 'system-optfunc *system-optfunc-attributes*
-  (getp 'system-optfunc 'commit-tuples) *system-optfunc-key* 'system-optfunc)
- (setf qtrieve-var (caar (qtrieve 'system-relation *system-relation-attributes* '("CARDINALITY")
-    *system-relation-key*
-    (list 'string-equal 'relation-name "SYSTEM-OPTFUNC"))))
- (delete-or-modify 'system-relation t (list 'string-equal 'relation-name "SYSTEM-OPTFUNC")
-   '("MODIFIEDP" "CARDINALITY")
-   (list t (+ qtrieve-var (length (getp 'system-optfunc 'commit-tuples)))))))
-  ;;
-  ;;  Insert the tuples into the SYSTEM-WHEREOPT relation
-  ;;
-  (cond ((> (length (getp 'system-whereopt 'commit-tuples)) 0)
- (funcall (find-symbol insert-name *pkg-string*) 'system-whereopt *system-whereopt-attributes*
-  (getp 'system-whereopt 'commit-tuples) *system-whereopt-key* 'system-whereopt)
- (setf qtrieve-var (caar (qtrieve 'system-relation *system-relation-attributes* '("CARDINALITY")
-    *system-relation-key*
-    (list 'string-equal 'relation-name "SYSTEM-WHEREOPT"))))
- (delete-or-modify 'system-relation t (list 'string-equal 'relation-name "SYSTEM-WHEREOPT")
-   '("MODIFIEDP" "CARDINALITY")
-   (list t (+ qtrieve-var (length (getp 'system-whereopt 'commit-tuples)))))))
-  ;;
-  ;;  Insert the tuples into the SYSTEM-IMPLEMENTATION relation
-  ;;
-  (cond ((> (length (getp 'system-implementation 'commit-tuples)) 0)
- (funcall (find-symbol insert-name *pkg-string*) 'system-implementation
-  *system-implementation-attributes* (getp 'system-implementation 'commit-tuples)
-  *system-implementation-key* 'system-implementation)
- (setf qtrieve-var (caar (qtrieve 'system-relation *system-relation-attributes* '("CARDINALITY")
-    *system-relation-key*
-    (list 'string-equal 'relation-name "SYSTEM-IMPLEMENTATION"))))
- (delete-or-modify 'system-relation t (list 'string-equal 'relation-name "SYSTEM-IMPLEMENTATION")
-   '("MODIFIEDP" "CARDINALITY")
-   (list t (+ qtrieve-var (length (getp 'system-implementation 'commit-tuples)))))))
-  ;;
-  ;;  Insert the tuples into the SYSTEM-STORAGE-STRUCTURE relation
-  ;;
-  (cond ((> (length (getp 'system-storage-structure 'commit-tuples)) 0)
- (funcall (find-symbol insert-name *pkg-string*) 'system-storage-structure
-  *system-storage-structure-attributes* (getp 'system-storage-structure 'commit-tuples)
-  *system-storage-structure-key* 'system-storage-structure)
- (setf qtrieve-var (caar (qtrieve 'system-relation *system-relation-attributes* '("CARDINALITY")
-    *system-relation-key*
-    (list 'string-equal 'relation-name "SYSTEM-STORAGE-STRUCTURE"))))
- (delete-or-modify 'system-relation t (list 'string-equal 'relation-name "SYSTEM-STORAGE-STRUCTURE")
- '("MODIFIEDP" "CARDINALITY")
- (list t (+ qtrieve-var (length (getp 'system-storage-structure 'commit-tuples)))))))
-  ;;
-  ;;  Insert the tuples into the SYSTEM-DOMAIN relation
-  ;;
-  (cond ((> (length (getp 'system-domain 'commit-tuples)) 0)
- (funcall (find-symbol insert-name *pkg-string*) 'system-domain *system-domain-attributes*
-  (getp 'system-domain 'commit-tuples) *system-domain-key* 'system-domain)
- (setf qtrieve-var (caar (qtrieve 'system-relation *system-relation-attributes* '("CARDINALITY")
-    *system-relation-key*
-    (list 'string-equal 'relation-name "SYSTEM-DOMAIN"))))
- (delete-or-modify 'system-relation t (list 'string-equal 'relation-name "SYSTEM-DOMAIN")
- '("MODIFIEDP" "CARDINALITY")
- (list t (+ qtrieve-var (length (getp 'system-domain 'commit-tuples)))))))
-  ;;
-  ;; Clear the property list so that tuples are not reinserted next time
-  ;;
- (mapcar (function (lambda (sys-rel)
-     (putp sys-rel nil 'commit-tuples)))
- *system-relations*))
-
-(defun default-tuple-format (domain-list &aux (result nil))
-  (do ((dom domain-list (cdr dom)))
-      ((null dom) result)
-    (setf result (append result (list (caar (qtrieve 'system-domain *system-domain-attributes*
-        '(default-print-width)  *system-domain-key*
-        `(string-equal domain-name ,(car dom)))))))))
-
-(defun get-default-value (domain)
-  (caar (qtrieve 'system-domain *system-domain-attributes* '(default-value) *system-domain-key*
- `(string-equal domain-name ,domain))))
-
-(defun init-where-opt (&aux function-list)
-  (setf *where-opt* '())
-  (setf *where-opt-macros* '())
-  (setf function-list (qtrieve 'system-whereopt *system-whereopt-attributes* '(function-name)
-       *system-whereopt-key* t))
-  (do ((function function-list (cdr function)))
-      ((null function) t)
-    (setf *where-opt* (append (car function) *where-opt*))
-    (push (concatenate 'string (caar function) "*") *where-opt-macros*)))
-
-(defun remove-dot-attr (rel-attr)
-  (setf rel-attr (string rel-attr))
-  (read-from-string (subseq rel-attr (+ 1 (search "." rel-attr)) (length rel-attr))))
-
-(defun remove-dot-rel (rel-attr &aux relation-index)
-  (setf rel-attr (string rel-attr))
-  (setf relation-index (search "." rel-attr))
-  (cond ((equal relation-index nil)
- nil)
-(t
- (read-from-string (subseq rel-attr 0 relation-index)))))
-Ä_BÄ:\ÄBÄ\ÄÄfÜÄzLBÄô\ÄBÄúBÄh\ÄBÄBÄjBÄµÄBÄ}“CÇDESTROY-ATTRIBUTEÄ¿BÄ8¿BÄ¢íÄQJôÊÄQJˇ€òÄW@¡PP@QíPÄYíúD¿BÄpBÄOÄBÄÄÄCÇDESTROY-ATTRIBUTE*ÄÎÄ	ÜÄÑDFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄ BÄ_BÄ:\ÄBÄ\ÄÄfÜÄ~?QBÄô\ÄBÄúBÄh\ÄBÄBÄjBÄµÄBÄ}“BÄ¿BÄ8¿BÄ¢íÄQJôÊÄQJˇ€òÄW@¡PP@QíPÄYíúD¿BÄpBÄ-OÄ.BÄ ÄÄÉÅDESTROY-DB*ÄÄÎÄ	ÜÄÑDFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄ/BÄ_BÄ:\ÄBÄ$\ÄÄfÜÄ
-{VBÄô\ÄBÄúBÄh\ÄBÄ$BÄjBÄµÄBÄ}“ÇDESTROY-DATABASE¿BÄ8¿BÄ¢íÄQJôÊÄQJˇ€òÄW@¡PP@QíPÄYíúD¿BÄpBÄ=OÄ>BÄ/ÄÄCÇDESTROY-DATABASE*ÄÄÎÄ	ÜÄÑDFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄ?BÄ_BÄ:\ÄBÄ$\ÄÄfÜÄbt6BÄô\ÄBÄúBÄh\ÄBÄ$BÄjBÄµÄBÄ}“BÄ<¿BÄ8¿BÄ¢íÄQJôÊÄQJˇ€òÄW@¡PP@QíPÄYíúD¿BÄpBÄLOÄMBÄ?ÄÄÇDESTROY-DOMAIN*ÄÄÎÄ	ÜÄ$@FÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄNBÄ_BÄ:BÄLMFL#!C(:HOST "SW-MFG" :BACKUP-DATE 2760540768. :SYSTEM-TYPE :LOGICAL :VERSION 1. :TYPE "XLD" :NAME "MISC-INTERNAL" :DIRECTORY ("RTMS-DIR") :SOURCE-PATTERN "( :DIRECTORY (\"RTMS-DIR\") :NAME :WILD :TYPE :WILD :VERSION :NEWEST)" :NOT-BACKED-UP T :CREATION-DATE 2760360316. :AUTHOR "REL3" :LENGTH-IN-BYTES 2066. :LENGTH-IN-BLOCKS 5. :BYTE-SIZE 16.)                                pp2Ä\Ä©ÅCOMPILE-DATA\ÄÏÄSW-MFG,ÅGODZILLAÜÄá§åœFÄFÄ\Äp¿,ÅCOMPILER,ÅVERSIONÄ\ÄFÄFÄp¿BÄ),ÇOPTIMIZE-SWITCHÄÜÄ©ÉQFASL-SOURCE-FILE-UNIQUE-IDÄ1Ä\Äp¿lÄFSÏÇMAKE-FASLOAD-PATHNAMEÄ\ÄÍÄQUOTEÄBÄ$\ÄBÄ8™ÄNILÄ\ÄBÄ8\Ä¨ÄRTMS\ÄBÄ8ÏÅMISC-INTERNALÄ\ÄBÄ8¨ÄLISP\ÄBÄ8FÄ©ÄBASEFÄ
-ÈÄFONTSÄ\Ä©Å*CODE-FONT*ÄÈÅ*COMMENT-FONT*ÈÅ*STRING-FONT*Ä)ÅPACKAGEÄ©ÄRTMS©ÄMODE©ÅCOMMON-LISPÄÄÅADD-DOTÄÄÎÄFÄÄFÄ¿$Ä¿BÄ:p¿¨ÄTICLÏÄART-QÄ]ÄFÄÄ:BÄ:BÄ:jÄTÄFÄp¿¨ÄSYSÄlÇDEBUG-INFO-STRUCTÄBÄP\ÄÅRELATIONCÅATTRIBUTEÄBÄ:BÄ:BÄ:ÄÍÄSTRING¿ÍÅSTRING-UPCASEÄ“lÄ.Ä¿™ÅCONCATENATEÄ“*ÇREAD-FROM-STRINGíPÄQäPÅQ¢åOÄgBÄPÄÄ√ÇCOMMIT-SYSTEM-RELATIONÄÎÄ3™áÜÄ@3FÄ›¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄhBÄ:BÄ:\ÄÉÅINSERT-NAMEÄÉÅQTRIEVE-VARÄBÄ:BÄ:BÄ:\Ä)ÇMACROS-EXPANDEDÄ\Ä™ÄPROGp¿¨ÄZLCÄ,ÅDO-NAMEDp¿BÄTÏÇINHIBIT-STYLE-WARNINGS™ÄSETFÄCÇ*SYSTEM-RELATIONS*—ÉÇ*SYSTEM-DOMAIN-KEY*Ä—CÉ*SYSTEM-DOMAIN-ATTRIBUTES*—√É*SYSTEM-STORAGE-STRUCTURE-KEY*—√Ñ*SYSTEM-STORAGE-STRUCTURE-ATTRIBUTES*Ä—ÉÉ*SYSTEM-IMPLEMENTATION-KEY*Ä—CÑ*SYSTEM-IMPLEMENTATION-ATTRIBUTES*—√Ç*SYSTEM-WHEREOPT-KEY*Ä—ÉÉ*SYSTEM-WHEREOPT-ATTRIBUTES*—ÉÇ*SYSTEM-OPTFUNC-KEY*—ÉÉ*SYSTEM-OPTFUNC-ATTRIBUTES*Ä—√Ç*SYSTEM-ATTRIBUTE-KEY*—√É*SYSTEM-ATTRIBUTE-ATTRIBUTES*Ä—√Ç*SYSTEM-RELATION-KEY*Ä—ÉÉ*SYSTEM-RELATION-ATTRIBUTES*—ÉÅ*PKG-STRING*—ÉÑ*SYSTEM-RELATION-STORAGE-STRUCTURE*Ä—√Ñ*SYSTEM-RELATION-BASE-IMPLEMENTATION*ÄëÇSYSTEM-RELATIONÄ¿√ÅCOMMIT-TUPLESÄ¿ÉÄGETP“BÄb¿,ÅINSERT-Ä¿lÄ-Ä¿BÄe“BÄc“™ÅFIND-SYMBOLÄ“\Ä¨ÅCARDINALITYÄ¿™ÅSTRING-EQUAL¿√ÅRELATION-NAMEÄ¿,ÇSYSTEM-RELATIONÄ¿™ÄLIST“ÅQTRIEVEÄ“\ÄlÅMODIFIEDPÄ¨ÅCARDINALITYÄ¿ÇDELETE-OR-MODIFY“ÇSYSTEM-ATTRIBUTE¿,ÇSYSTEM-ATTRIBUTE¿√ÅSYSTEM-OPTFUNC¿ÏÅSYSTEM-OPTFUNC¿ÇSYSTEM-WHEREOPTÄ¿,ÇSYSTEM-WHEREOPTÄ¿√ÇSYSTEM-IMPLEMENTATIONÄ¿ÏÇSYSTEM-IMPLEMENTATIONÄ¿ÉSYSTEM-STORAGE-STRUCTURE¿,ÉSYSTEM-STORAGE-STRUCTURE¿√ÅSYSTEM-DOMAINÄ¿ÏÅSYSTEM-DOMAINÄ¿ÉÄPUTPíPPíJô.‰PPPPP™ä@√PíB¡PPPPíPPB©PPPPP P!P"ö#™BA¡Pˇ›P P!P"ö$Pˇ›AQPPíäCˇa"í%®&PPíJô'‰@QPíB¡&PP&PPíP&PB©PPPPP P'P"ö#™BA¡Pˇ›P P'P"ö$Pˇ›AQ&PPíäCˇa"í%®(PPíJô'‰@QPíB¡(PP(PPíP(PB©PPPPP P)P"ö#™BA¡Pˇ›P P)P"ö$Pˇ›AQ(PPíäCˇa"í%®*PPíJô'‰@QPíB¡*PP*PPí
-P*PB©PPPPP P+P"ö#™BA¡Pˇ›P P+P"ö$Pˇ›AQ*PPíäCˇa"í%®,PPíJô'‰@QPíB¡,P	P,PPíP,PB©PPPPP P-P"ö#™BA¡Pˇ›P P-P"ö$Pˇ›AQ,PPíäCˇa"í%®.PPíJô'‰@QPíB¡.PP.PPíP.PB©PPPPP P/P"ö#™BA¡Pˇ›P P/P"ö$Pˇ›AQ.PPíäCˇa"í%®0PPíJô'‰@QPíB¡0PP0PPíP0PB©PPPPP P1P"ö#™BA¡Pˇ›P P1P"ö$Pˇ›AQ0PPíäCˇa"í%®B€B—PD¡C¡	¸CQDSˇ€P2öCC√¡D≈DıÁBOÄ≠BÄhÄÄÉÇDEFAULT-TUPLE-FORMATÄÎÄ
- ÜÄ@HFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄÆ\ÄÉÅDOMAIN-LISTÄBÄ:\Ä√ÄRESULTÉÄDOMÄ\ÄBÄt\Äp¿BÄ\lÅXR-BQ-LISTBÄvBÄ|ÄBÄ~—BÄëBÄ™¿\ÄÉÇDEFAULT-PRINT-WIDTHÄ¿BÄó¿ÉÅDOMAIN-NAMEÄ¿BÄö“BÄõ“p¿BÄ\,Å*APPENDÄíÄQA¡‰@QPPPPPPAS	ö
-™B	äí@¡A≈Á@OÄƒBÄÆÄÄCÇGET-DEFAULT-VALUEÄÄÎÄFÄ@FÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄ≈\Ä√ÄDOMAINBÄ:BÄ:\ÄBÄt\ÄBÄæÄBÄ~—BÄëBÄ™¿\Ä√ÅDEFAULT-VALUEÄ¿BÄó¿BÄ¡¿BÄö“BÄõíPPPPPPÄQ	ö
-™BˇOÄ”BÄ≈ÄÄ√ÅINIT-WHERE-OPTÄÎÄ(ÜÄ@FÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄ‘BÄ:BÄ:\Ä√ÅFUNCTION-LISTÄ*ÅFUNCTION\ÄBÄt\Ä™ÄPUSHBÄvBÄ|ÄBÄÑ—BÄÖ—CÇ*WHERE-OPT-MACROS*—ÉÅ*WHERE-OPT*ÄëBÄ§¿\Äp¿BÄTÏÅFUNCTION-NAMEÄ¿BÄõ“BÄ√“BÄb¿lÄ*Ä¿BÄeí⁄⁄PPPPˇ›	™@√A¡‰ASP
-í¿PAQBPö\¿A≈ÛÁSOÄËBÄ‘ÄÄÇREMOVE-DOT-ATTRÄÄÎÄFÄ@FÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄÈ\ÄÅREL-ATTRBÄ:BÄ:\ÄBÄt\ÄBÄ|ÄBÄb“lÄ.Ä¿p¿BÄ\,ÅSEARCH*Ä“ÍÄSUBSEQ“BÄfíÄQäÄ√PÄQíˇkÄQäCöåOÄ˘BÄÈÄÄ√ÅREMOVE-DOT-RELÄÎÄÜÄ@DFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄ˙\ÄBÄÚBÄ:\Ä√ÅRELATION-INDEX\ÄBÄt\ÄBÄ|ÄBÄb“lÄ.Ä¿BÄ˜“BÄ¯“BÄfíÄQäÄ¡PÄQí@¡ÊRÄQJ@QöåOÄBÄ˙Ä1Ä\Äp¿BÄ\,ÑFASL-RECORD-FILE-MACROS-EXPANDED\ÄBÄ8\Ä\ÄÍÄDEFUNÄÜÄ'\ÄBÄ·ÜÄ•ò\ÄBÄæÜÄ.Ÿã\ÄBÄ|ÜÄ[ÊÑ\ÄBÄ{ÜÄ(Ã¢\ÄBÄyÜÄ*˝j\ÄBÄvÜÄ=Ã#ÄÄp 'system-implementation 'commit-tuples)))))))
-  ;;
-  ;;  Insert the tuples into the SYSTEM-STORAGE-STRUCTURE relation
-  ;;
-  (cond ((> (length (getp 'system-storage-structure 'commit-tuples)) 0)
- (funcall (find-symbol insert-name *pkg-string*) 'system-storage-structure
-  *system-storage-structure-attributes* (getp 'system-storage-structure 'commit-tuples)
-  *system-storage-structure-key* 'system-storage-structure)
- (setf qtrieve-var (caar (qtrieve 'system-relation *system-relation-attributes* '("CARDINALITY")
-    *system-relation-key*
-    (list 'string-equal 'relation-name "SYSTEM-STORAGE-STRUCTURE"))))
- (delete-or-modify 'system-relation t (list 'string-equal 'relation-name "SYSTEM-STORAGE-STRUCTURE")
- '("MODIFIEDP" "CARDINALITY")
- (list t (+ qtrieve-var (length (getp 'system-storage-structure 'commit-tuples)))))))
-  ;;
-  ;;  Insert the tuples into the SYSTEM-DOMAIN relation
-  ;;
-  (cond ((> (length (getp 'system-domain 'commit-tuples)) 0)
- (funcLMFL#!C(:HOST "SW-MFG" :BACKUP-DATE 2760540771. :SYSTEM-TYPE :LOGICAL :VERSION 1. :TYPE "LISP" :NAME "MISC-USER" :DIRECTORY ("RTMS-DIR") :SOURCE-PATTERN "( :DIRECTORY (\"RTMS-DIR\") :NAME :WILD :TYPE :WILD :VERSION :NEWEST)" :CHARACTERS T :NOT-BACKED-UP T :CREATION-DATE 2749846253. :AUTHOR "REL3" :LENGTH-IN-BYTES 1062. :LENGTH-IN-BLOCKS 2. :BYTE-SIZE 8.)
-
-;;; -*- Mode:Common-Lisp; Package:RTMS; Fonts:(*CODE-FONT* *COMMENT-FONT* *STRING-FONT*); Base:10 -*-
-;;; Copyright (c) by Texas Instruments, Incorporated
-;;; All rights reserved
-;;; MISC-USER
-;;;
-;;; This file contains the following Explorer extensions to CommonLisp d as Indicated in the June 1985 Explorer Lisp
-;;; Reference
-;;;
-;;; This file comtains the following obsolete functions
-;;;
-;;; This file contains the following functions which are unknown in CommonLisp
-;;;
-;;; The following function contains flavor references and thus are incompatable with CommonLisp. Their removal will not
-;;; effect the functionality of RTMS.
-;;;
-
-(defun recover-all ()
-  (do ((relations *system-relations* (cdr relations)))
-      ((null relations) t)
-    (putp (car relations) nil 'entry-point)
-    (putp (car relations) nil 'commit-tuples))
-  (setf *active-db* nil)
-  (if *save-user-id*
-      (setf user-id *save-user-id*))
-  (setf *restore-operation* nil))
-
-(defun recover-restore ()
-  (setf *restore-operation* nil))
-M-IMPLEMENTATION-KEY*Ä—CÑ*SYSTEM-IMPLEMENTATION-ATTRIBUTES*—√Ç*SYSTEM-WHEREOPT-KEY*Ä—ÉÉ*SYSTEM-WHEREOPT-ATTRIBUTES*—ÉÇ*SYSTEM-OPTFUNC-KEY*—ÉÉ*SYSTEM-OPTFUNC-ATTRIBUTES*Ä—√Ç*SYSTEM-ATTRIBUTE-KEY*—√É*SYSTEM-ATTRIBUTE-ATTRIBUTES*Ä—√Ç*SYSTEM-RELATION-KEY*Ä—ÉÉ*SYSTEM-RELATION-ATTRIBUTES*—ÉÅ*PKG-STRING*—ÉÑ*SYSTEM-RELATION-STORAGE-STRUCTURE*Ä—√Ñ*SYSTEM-RELATION-BASE-IMPLEMENTATION*ÄëÇSYSTEM-RELATIONÄ¿√ÅCOMMIT-TUPLESÄ¿ÉÄGETP“BÄb¿,ÅINSERT-Ä¿lÄ-Ä¿BÄe“BÄc“™ÅFIND-SYMBOLÄ“\Ä¨ÅCARDINALITYÄ¿™ÅSTRING-EQUAL¿√ÅRELATION-NAMEÄ¿,ÇSYSTEM-RELATIONÄ¿™ÄLIST“ÅQTRIEVEÄ“\ÄlÅMODIFIEDPÄ¨ÅCARDINALITYÄ¿ÇDELETE-OR-MODIFY“ÇSYSTEM-ATTRIBUTE¿,ÇSYSTEM-ATTRIBUTE¿√ÅSYSTEM-OPTFUNC¿ÏÅSYSTEM-OPTFUNC¿ÇSYSTEM-WHEREOPTÄ¿,ÇSYSTEM-WHEREOPTÄ¿√ÇSYSTEM-IMPLEMENTATIONÄ¿ÏÇSYSTEM-IMPLEMENTATIONÄ¿ÉSYSTEM-STORAGE-STRUCTURE¿,ÉSYSTEM-STORAGE-STRUCTURE¿√ÅSYSTEM-DOMAINÄ¿ÏÅSYSTEM-DOMAINÄ¿ÉÄPUTPíPPíJô.‰PPPPP™ä@√PíB¡PPPPíPPB©PPPPP P!P"ö#™BA¡Pˇ›P P!PLMFL#!C(:HOST "SW-MFG" :BACKUP-DATE 2760540774. :SYSTEM-TYPE :LOGICAL :VERSION 1. :TYPE "XLD" :NAME "MISC-USER" :DIRECTORY ("RTMS-DIR") :SOURCE-PATTERN "( :DIRECTORY (\"RTMS-DIR\") :NAME :WILD :TYPE :WILD :VERSION :NEWEST)" :NOT-BACKED-UP T :CREATION-DATE 2760359818. :AUTHOR "REL3" :LENGTH-IN-BYTES 516. :LENGTH-IN-BLOCKS 2. :BYTE-SIZE 16.)                                     pp2Ä\Ä©ÅCOMPILE-DATA\ÄÏÄSW-MFG,ÅGODZILLAÜÄá§öÕFÄFÄ\Äp¿,ÅCOMPILER,ÅVERSIONÄ\ÄFÄFÄp¿BÄ),ÇOPTIMIZE-SWITCHÄÜÄ©ÉQFASL-SOURCE-FILE-UNIQUE-IDÄ1Ä\Äp¿lÄFSÏÇMAKE-FASLOAD-PATHNAMEÄ\ÄÍÄQUOTEÄBÄ$\ÄBÄ8™ÄNILÄ\ÄBÄ8\Ä¨ÄRTMS\ÄBÄ8lÅMISC-USERÄ\ÄBÄ8¨ÄLISP\ÄBÄ8FÄ©ÄBASEFÄ
-ÈÄFONTSÄ\Ä©Å*CODE-FONT*ÄÈÅ*COMMENT-FONT*ÈÅ*STRING-FONT*Ä)ÅPACKAGEÄ©ÄRTMS©ÄMODE©ÅCOMMON-LISPÄÄÉÅRECOVER-ALLÄÄÎÄ
-ÜÄ@FÄ¿$Ä¿BÄ:p¿¨ÄTICLÏÄART-QÄ]ÄFÄÄ:BÄ:BÄ:jÄTÄFÄp¿¨ÄSYSÄlÇDEBUG-INFO-STRUCTÄBÄPBÄ:BÄ:\ÄCÅRELATIONSÄ\Ä)ÇMACROS-EXPANDEDÄ\Ä™ÄSETF™ÄPROGÄÉÇ*RESTORE-OPERATION*Ä—p¿BÄT,ÅUSER-IDÄ—√Å*SAVE-USER-ID*—ÉÅ*ACTIVE-DB*Ä—CÇ*SYSTEM-RELATIONS*ëÉÅENTRY-POINTÄ¿ÉÄPUTP“√ÅCOMMIT-TUPLESÄÄP@¡
-‰@Sˇ€P	ò@Sˇ€
-P	ò@≈ˆÁ⁄‰P¿⁄ROÄoBÄPÄÄÇRECOVER-RESTOREÄÄÎÄFÄFÄ¿$Ä¿BÄ:BÄV]ÄFÄÄ:BÄ:BÄ:BÄYFÄÄ^BÄpBÄ:BÄ:BÄ:\ÄBÄb\ÄBÄdÄBÄfë⁄ROÄzBÄpÄ1Ä\Äp¿BÄ\,ÑFASL-RECORD-FILE-MACROS-EXPANDED\ÄBÄ8\Ä\ÄÍÄDEFUNÄÜÄ'\ÄBÄeÜÄ=Ã#\ÄBÄdÜÄ[ÊÑÄÄetf *restore-operation* nil))
-M-IMPLEMENTATION-KEY*Ä—CÑ*SYSTEM-IMPLEMENTATION-ATTRIBUTES*—√Ç*SYSTEM-WHEREOPT-KEY*Ä—ÉÉ*SYSTEM-WHEREOPT-ATTRIBUTES*—ÉÇ*SYSTEM-OPTFUNC-KEY*—ÉÉ*SYSTEM-OPTFUNC-ATTRIBUTES*Ä—√Ç*SYSTEM-ATTRIBUTE-KEY*—√É*SYSTEM-ATTRIBUTE-ATTRIBUTES*Ä—√Ç*SYSTEM-RELATION-KEY*Ä—ÉÉ*SYSTEM-RELATION-ATTRIBUTES*—ÉÅ*PKG-STRING*—ÉÑ*SYSTEM-RELATION-STORAGE-STRUCTURE*Ä—√Ñ*SYSTEM-RELATION-BASE-IMPLEMENTATION*ÄëÇSYSTEM-RELATIONÄ¿√ÅCOMMIT-TUPLESÄ¿ÉÄGETP“BÄb¿,ÅINSERT-Ä¿lÄ-Ä¿BÄe“BÄc“™ÅFIND-SYMBOLÄ“\Ä¨ÅCARDINALITYÄ¿™ÅSTRING-EQUAL¿√ÅRELATION-NAMEÄ¿,ÇSYSTEM-RELATIONÄ¿™ÄLIST“ÅQTRIEVEÄ“\ÄlÅMODIFIEDPÄ¨ÅCARDINALITYÄ¿ÇDELETE-OR-MODIFY“ÇSYSTEM-ATTRIBUTE¿,ÇSYSTEM-ATTRIBUTE¿√ÅSYSTEM-OPTFUNC¿ÏÅSYSTEM-OPTFUNC¿ÇSYSTEM-WHEREOPTÄ¿,ÇSYSTEM-WHEREOPTÄ¿√ÇSYSTEM-IMPLEMENTATIONÄ¿ÏÇSYSTEM-IMPLEMENTATIONÄ¿ÉSYSTEM-STORAGE-STRUCTURE¿,ÉSYSTEM-STORAGE-STRUCTURE¿√ÅSYSTEM-DOMAINÄ¿ÏÅSYSTEM-DOMAINÄ¿ÉÄPUTPíPPíJô.‰PPPPP™ä@√PíB¡PPPPíPPB©PPPPP P!P"ö#™BA¡Pˇ›P P!PLMFL#!C(:HOST "SW-MFG" :BACKUP-DATE 2760540777. :SYSTEM-TYPE :LOGICAL :VERSION 1. :TYPE "LISP" :NAME "MODIFY-AVL" :DIRECTORY ("RTMS-DIR") :SOURCE-PATTERN "( :DIRECTORY (\"RTMS-DIR\") :NAME :WILD :TYPE :WILD :VERSION :NEWEST)" :CHARACTERS T :NOT-BACKED-UP T :CREATION-DATE 2749846273. :AUTHOR "REL3" :LENGTH-IN-BYTES 48083. :LENGTH-IN-BLOCKS 47. :BYTE-SIZE 8.)
-
-;;; -*- Mode:Common-Lisp; Package:RTMS; Fonts:(*CODE-FONT* *COMMENT-FONT* *STRING-FONT*); Base:10 -*-
-;;; Copyright (c) by Texas Instruments, Incorporated
-;;; All rights reserved
 ;;; MODIFY-AVL
 ;;;
 ;;; The following function contains flavor references and thus are incompatable with CommonLisp. Their removal will not

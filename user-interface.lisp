@@ -1,45 +1,50 @@
+;;; -*- Mode:Common-Lisp; Package:RTMS; Base:10 -*-
 
-;;; -*- Mode:Common-Lisp; Package:RTMS; Fonts:(WIDER-MEDFNT MEDFNB MEDFNB HL7); Base:10 -*-
 ;;; Copyright (c) by Texas Instruments, Incorporated
 ;;; All rights reserved
-;**************************************************************************
-;                             USER INTERFACE *
-;      *
-;      *
-; 1. Issues to be considered later.          *
-;   a) Output-window  ----> a specified file.                                      *
-;   b) Parts of output (ex. a relation) to a ZMACS window.                         *
-;   c) Use line area scrolling for interactive maintenance of database.            *
-;      *
-;      *
-;      *
-;      *
-;  AUTHOR                         *
-; CSL                  *
-; Texas Instruments                 *
-; .....                  *
-; Version 0.0                 *
-;**************************************************************************
-;;;Change History
-;;;  03.31.87  MRR  Changed DBMS-RC defflavor to make scroll-bar always appear.
-;;;                 Changed references to XFASL files to XLD for Save-relation command.
-;;;  04.01.87  MRR  Changed DBMS-RC defflavor to prevent pixel overlap of scroll-bar.
-;;;  04.06.87  MRR  Fixed HELP-LINE-AREA-DEL to delete tuples using the display.
-;;;                 Fixed mouse documentation strings for various windows.
-;;;                 Fixed method (DBMS-RC :handle-unknown-input) to call Relation help functions
-;;;                 correctly.
-;;;  04.07.87  MRR  Fixed HELP-LINE-AREA. Made references to w:*remove-typeout-standard-message*
-;;;                 for typeout windows. Fixed HELP-LINE-AREA-MOD for the case when the current
-;;;                 package is not RTMS. (SPR #4197)
-;;;  04.09.87  MRR  Added :sensitive-item-types initialization option to DBMS-RC defflavor so
-;;;                 that only valid types are made mouse-sensitive. (see SPR #1858)
-;;;                 Fixed command for sending display output to file.
 
-;**************************************************************************
-;                          INTERFACE GLOBAL VARIABLES                           *
-;     These global variables are used to hold the latest user-values for the       *
-;     variables in the choose-variables windows associated with various commands.  *
-;**************************************************************************
+
+;;; User Interface
+;;;
+;;;
+;;; 1. Issues to be considered later.
+;;;   a) Output-window  ----> a specified file.
+;;;   b) Parts of output (ex. a relation) to a ZMACS window.
+;;;   c) Use line area scrolling for interactive maintenance of database.
+;;;
+;;; AUTHOR CSL
+;;; Texas Instruments
+;;;
+;;; Version 0.0
+;;;
+;;; Change History
+;;;
+;;;  03.31.87 MRR Changed DBMS-RC defflavor to make scroll-bar always
+;;;               appear.  Changed references to XFASL files to XLD
+;;;               for Save-relation command.
+;;;  04.01.87 MRR Changed DBMS-RC defflavor to prevent pixel overlap
+;;;               of scroll-bar.
+;;;  04.06.87 MRR Fixed HELP-LINE-AREA-DEL to delete tuples using the
+;;;               display.  Fixed mouse documentation strings for
+;;;               various windows.  Fixed method (DBMS-RC
+;;;               :handle-unknown-input) to call Relation help
+;;;               functions correctly.
+;;;  04.07.87 MRR Fixed HELP-LINE-AREA. Made references to
+;;;               w:*remove-typeout-standard-message* for typeout
+;;;               windows. Fixed HELP-LINE-AREA-MOD for the case when
+;;;               the current package is not RTMS. (SPR #4197)
+
+;;;  04.09.87 MRR Added :sensitive-item-types initialization option to
+;;;               DBMS-RC defflavor so that only valid types are made
+;;;               mouse-sensitive. (see SPR #1858) Fixed command for
+;;;               sending display output to file.
+;;;
+;;; Interface global variables
+;;;
+;;; These global variables are used to hold the latest user-values for
+;;; the variables in the choose-variables windows associated with
+;;; various commands.
+
 (PUTPROP 'display nil 'ucl:items)
 (PUTPROP 'display nil 'ucl:commands-wanting-on)
 (PUTPROP 'command-menu nil 'ucl:items)
@@ -256,17 +261,17 @@
 (OTHERWISE (BEEP)))))))
 
 
-;**************************************************************************
-;                          DEFCOMMANDS FOR ALL DATABASE COMMANDS                   *
-;      *
-;     Each defcommand definition enables individual database commands and a few    *
-;     help commands to become part of the database command table. If the reader    *
-;     is familiar with UCL, the following DEFCOMMAND definitions will be           *
-;     self-explanatory.                      *
-;**************************************************************************
-;**************************************************************************
-;            DEFCOMMAND FOR ACTIVE DATABASE  *
-;**************************************************************************
+
+;; Defcommands for all database commands
+;;
+;; Each defcommand definition enables individual database commands and
+;; a few help commands to become part of the database command
+;; table. If the reader is familiar with UCL, the following DEFCOMMAND
+;; definitions will be self-explanatory.
+;;
+;;
+;; defcommand for active database
+
 (UCL:DEFCOMMAND (DBMS-RC active-database)()
             `(:description "Returns the name of the active database. (ACTIVE-DATABASE)"
       :menus ((command-menu :COLUMN "Other Features"))
@@ -1122,293 +1127,294 @@
       (SETQ keywords (LIST 'dir dir
      'path path)))))
   (DEFINE-TRANSACTION transaction forms keywords))
-;**************************************************************************
-;                DEFCOMMAND  FOR MODIFY TRANSACTION                                *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC modify-transaction) (transaction dir path
-      &AUX keywords)
-    `(:description ,(STRING-APPEND (DOCUMENTATION 'modify-transaction)
-     (FORMAT NIL "  ~S"
-      (CONS
+
+
+;; defcommand -- modify transaction
+(ucl:defcommand (dbms-rc modify-transaction) (transaction dir path
+      &aux keywords)
+    `(:description ,(string-append (documentation 'modify-transaction)
+     (format nil "  ~s"
+      (cons
         'modify-transaction
-        (ARGLIST 'modify-transaction))))
-      :arguments (:user-supplied (:label "Transaction Name:"
+        (arglist 'modify-transaction))))
+      :arguments (:user-supplied (:label "transaction name:"
     :default *ui-transaction*
     :type (:documentation
-      "Name of the transaction to be modified."
+      "name of the transaction to be modified."
       :sexp))
-   (:label "Directory:"
+   (:label "directory:"
     :default *ui-directory*
     :type (:documentation
-      "Default directory in which it can be found, if not in memory."
-      :SEXP))
-   (:label "Pathname :"
+      "default directory in which it can be found, if not in memory."
+      :sexp))
+   (:label "pathname :"
     :default *ui-file*
     :type (:documentation
-      "The default file in which it can be found, if not in memory."
-      :SEXP))
-  :label "Give parameters for MODIFY TRANSACTION:")
-      :menus ((command-menu :COLUMN "Manipulation"))
-      :documentation "Used to modify a transaction."
-      :keys ((#\SUPER-M #\SUPER-T)))
-  (SEND *output-window*
+      "the default file in which it can be found, if not in memory."
+      :sexp))
+  :label "give parameters for modify transaction:")
+      :menus ((command-menu :column "manipulation"))
+      :documentation "used to modify a transaction."
+      :keys ((#\super-m #\super-t)))
+  (send *output-window*
 :append-item
-(FORMAT nil "~S"
-(LIST 'MODIFY-TRANSACTION transaction
-      (SETQ keywords (LIST 'dir dir
+(format nil "~s"
+(list 'modify-transaction transaction
+      (setq keywords (list 'dir dir
      'path path)))))
-  (MODIFY-TRANSACTION transaction keywords))
-;**************************************************************************
-;                DEFCOMMAND  FOR DEFINE DATABASE                                   *
-;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC define-database) (database directory doc env
-     &AUX keywords)
-    `(:description ,(STRING-APPEND (DOCUMENTATION 'define-database)
-     (FORMAT NIL "  ~S"
-      (CONS
+  (modify-transaction transaction keywords))
+
+
+;; defcommand -- For define database                                   *
+
+(ucl:defcommand (dbms-rc define-database) (database directory doc env
+     &aux keywords)
+    `(:description ,(string-append (documentation 'define-database)
+     (format nil "  ~s"
+      (cons
         'define-database
-        (ARGLIST 'define-database))))
-      :arguments (:user-supplied (:label "Database Name:"
+        (arglist 'define-database))))
+      :arguments (:user-supplied (:label "database name:"
     :default nil
     :type (:documentation
-      "Name of the database."
+      "name of the database."
       :sexp))
-   (:label "Directory Name:"
+   (:label "directory name:"
     :default *ui-directory*
     :type (:documentation
-     "Name of the save directory for this database."
+     "name of the save directory for this database."
      :sexp))
-   (:label "Documentation:"
+   (:label "documentation:"
     :default *ui-doc*
     :type (:documentation
-      "Documentation for the database."
+      "documentation for the database."
       :string))
-   (:label "Environment:"
+   (:label "environment:"
     :default nil
     :type (:documentation
-      "Name of the environment to be used to replace the default settings."
+      "name of the environment to be used to replace the default settings."
       :sexp))
-  :label "Give parameters for DEFINE DATABASE:")
-      :menus ((command-menu :COLUMN "Definition"))
-      :documentation "Used to define a database in a given directory."
-      :keys ((#\SUPER-D #\SUPER-D)))
-  (SEND *output-window*
+  :label "give parameters for define database:")
+      :menus ((command-menu :column "definition"))
+      :documentation "used to define a database in a given directory."
+      :keys ((#\super-d #\super-d)))
+  (send *output-window*
 :append-item
-(FORMAT nil "~S"
-(LIST 'DEFDB database
-      (SETQ keywords (LIST 'dir directory
+(format nil "~s"
+(list 'defdb database
+      (setq keywords (list 'dir directory
      'doc doc
      'environment env)))))
-  (DEFDB database keywords))
+  (defdb database keywords))
 ;**************************************************************************
-;                DEFCOMMAND  FOR MODIFY DATABASE                                   *
+;                defcommand  for modify database                                   *
 ;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC modify-database) (database new-database directory doc
-     &AUX keywords)
-    `(:description ,(STRING-APPEND (DOCUMENTATION 'modify-database)
-     (FORMAT NIL "  ~S"
-      (CONS
+(ucl:defcommand (dbms-rc modify-database) (database new-database directory doc
+     &aux keywords)
+    `(:description ,(string-append (documentation 'modify-database)
+     (format nil "  ~s"
+      (cons
         'modify-database
-        (ARGLIST 'modify-database))))
-      :arguments (:user-supplied (:label "Database Name:"
+        (arglist 'modify-database))))
+      :arguments (:user-supplied (:label "database name:"
     :default nil
     :type (:documentation
-      "Name of the database."
+      "name of the database."
       :sexp))
-   (:label "New Database Name:"
+   (:label "new database name:"
     :default nil
     :type (:documentation
-      "If the database is to be renamed specify the new name."
+      "if the database is to be renamed specify the new name."
       :sexp))
-   (:label "Directory Name:"
-    :default NIL
+   (:label "directory name:"
+    :default nil
     :type (:documentation
-     "To change the save directory for this database specify a new directory."
+     "to change the save directory for this database specify a new directory."
      :sexp))
-   (:label "Documentation:"
-    :default NIL
+   (:label "documentation:"
+    :default nil
     :type (:documentation
-      "New documentation for the database."
+      "new documentation for the database."
       :string))
-  :label "Give parameters for MODIFY DATABASE:")
-      :menus ((command-menu :COLUMN "Manipulation"))
-      :documentation "Used to modify the features a database."
-      :keys ((#\SUPER-M #\HYPER-D)))
-  (SEND *output-window*
+  :label "give parameters for modify database:")
+      :menus ((command-menu :column "manipulation"))
+      :documentation "used to modify the features a database."
+      :keys ((#\super-m #\hyper-d)))
+  (send *output-window*
 :append-item
-(FORMAT nil "~S"
-(LIST 'MODIFY-DATABASE database
-      (SETQ keywords (LIST 'database-name new-database
+(format nil "~s"
+(list 'modify-database database
+      (setq keywords (list 'database-name new-database
       'dir directory
      'doc doc
      )))))
-  (MODIFY-DATABASE database keywords))
+  (modify-database database keywords))
 ;**************************************************************************
-;                DEFCOMMAND  FOR MODIFY ATTRIBUTE                                  *
+;                defcommand  for modify attribute                                  *
 ;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC modify-attribute) (relation attr new-attr def doc format
-     &AUX keywords)
-    `(:description ,(STRING-APPEND (DOCUMENTATION 'modify-attribute)
-     (FORMAT NIL "  ~S"
-      (CONS
+(ucl:defcommand (dbms-rc modify-attribute) (relation attr new-attr def doc format
+     &aux keywords)
+    `(:description ,(string-append (documentation 'modify-attribute)
+     (format nil "  ~s"
+      (cons
         'modify-attribute
-        (ARGLIST 'modify-attribute))))
-      :arguments (:user-supplied (:label "Relation Name:"
+        (arglist 'modify-attribute))))
+      :arguments (:user-supplied (:label "relation name:"
     :default *ui-relation*
     :type (:documentation
-      "Name of the relation."
+      "name of the relation."
       :sexp))
-   (:label "Attribute Name:"
+   (:label "attribute name:"
     :default nil
     :type (:documentation
-      "Name of the attribute."
+      "name of the attribute."
       :sexp))
-   (:label "New Attribute Name:"
+   (:label "new attribute name:"
     :default nil
     :type (:documentation
-      "If the attribute is to be renamed specify the new name."
+      "if the attribute is to be renamed specify the new name."
       :sexp))
-   (:label "Default Value:"
-    :default NIL
+   (:label "default value:"
+    :default nil
     :type (:documentation
-     "To change the default value of this attribute specify a new value."
+     "to change the default value of this attribute specify a new value."
      :sexp))
-   (:label "Documentation:"
-    :default NIL
-    :type (:documentation
-      "New documentation for the attribute."
-      :string))
-   (:label "Default width :"
+   (:label "documentation:"
     :default nil
     :type (:documentation
-      "The new default width to be used for this attribute."
+      "new documentation for the attribute."
+      :string))
+   (:label "default width :"
+    :default nil
+    :type (:documentation
+      "the new default width to be used for this attribute."
       :sexp))
-  :label "Give parameters for MODIFY ATTRIBUTE:")
-      :menus ((command-menu :COLUMN "Manipulation"))
-      :documentation "Used to modify the features a attribute."
-      :keys ((#\SUPER-M #\SUPER-A)))
-  (SEND *output-window*
+  :label "give parameters for modify attribute:")
+      :menus ((command-menu :column "manipulation"))
+      :documentation "used to modify the features a attribute."
+      :keys ((#\super-m #\super-a)))
+  (send *output-window*
 :append-item
-(FORMAT nil "~S"
-(LIST 'MODIFY-ATTRIBUTE relation attr
-      (SETQ keywords (LIST 'attribute-name new-attr
+(format nil "~s"
+(list 'modify-attribute relation attr
+      (setq keywords (list 'attribute-name new-attr
      'def def
      'doc doc 'format format
      )))))
-  (MODIFY-ATTRIBUTE relation attr keywords))
+  (modify-attribute relation attr keywords))
 ;**************************************************************************
-;                DEFCOMMAND  FOR MODIFY VIEW *
+;                defcommand  for modify view *
 ;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC modify-view) (view def doc
-     &AUX keywords)
-    `(:description ,(STRING-APPEND (DOCUMENTATION 'modify-view)
-     (FORMAT NIL "  ~S"
-      (CONS
+(ucl:defcommand (dbms-rc modify-view) (view def doc
+     &aux keywords)
+    `(:description ,(string-append (documentation 'modify-view)
+     (format nil "  ~s"
+      (cons
         'modify-view
-        (ARGLIST 'modify-view))))
-      :arguments (:user-supplied (:label "View Name:"
-    :default NIL
-    :type (:documentation
-      "Name of the view."
-      :sexp))
-   (:label "View Definition:"
+        (arglist 'modify-view))))
+      :arguments (:user-supplied (:label "view name:"
     :default nil
     :type (:documentation
-      "New definition of the view."
+      "name of the view."
       :sexp))
-   (:label "Documentation:"
-    :default NIL
+   (:label "view definition:"
+    :default nil
     :type (:documentation
-      "New documentation for the view."
+      "new definition of the view."
+      :sexp))
+   (:label "documentation:"
+    :default nil
+    :type (:documentation
+      "new documentation for the view."
       :string))
-  :label "Give parameters for MODIFY VIEW:")
-      :menus ((command-menu :COLUMN "Manipulation"))
-      :documentation "Used to modify the features a view."
-      :keys ((#\SUPER-M #\SUPER-V)))
-  (SEND *output-window*
+  :label "give parameters for modify view:")
+      :menus ((command-menu :column "manipulation"))
+      :documentation "used to modify the features a view."
+      :keys ((#\super-m #\super-v)))
+  (send *output-window*
 :append-item
-(FORMAT nil "~S"
-(LIST 'MODIFY-VIEW view
-      (SETQ keywords (LIST
+(format nil "~s"
+(list 'modify-view view
+      (setq keywords (list
      'view-def def
      'view-doc doc
      )))))
-  (MODIFY-VIEW view keywords))
+  (modify-view view keywords))
 ;**************************************************************************
-;                DEFCOMMAND  FOR MODIFY RELATION                                   *
+;                defcommand  for modify relation                                   *
 ;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC modify-relation) (rel new-rel add-att del-att ren-att
+(ucl:defcommand (dbms-rc modify-relation) (rel new-rel add-att del-att ren-att
      imp sto format key dir doc
-     &AUX keywords)
-    `(:description ,(STRING-APPEND (DOCUMENTATION 'modify-relation)
-     (FORMAT NIL "  ~S"
-      (CONS
+     &aux keywords)
+    `(:description ,(string-append (documentation 'modify-relation)
+     (format nil "  ~s"
+      (cons
         'modify-relation
-        (ARGLIST 'modify-relation))))
-      :arguments (:user-supplied (:label "Relation Name:"
+        (arglist 'modify-relation))))
+      :arguments (:user-supplied (:label "relation name:"
     :default *ui-relation*
     :type (:documentation
-      "Name of the Relation."
+      "name of the relation."
       :sexp))
-   (:label "New Relation Name:"
+   (:label "new relation name:"
     :default nil
     :type (:documentation
-      "If the relation is to be renamed specify the new name."
+      "if the relation is to be renamed specify the new name."
       :sexp))
-   (:label "Add attributes:"
-    :default NIL
+   (:label "add attributes:"
+    :default nil
     :type (:documentation
-     "Specify a list of attribute-descriptor pairs for attributes to be added to this relation."
+     "specify a list of attribute-descriptor pairs for attributes to be added to this relation."
      :sexp))
-   (:label "Delete attributes:"
-    :default NIL
+   (:label "delete attributes:"
+    :default nil
     :type (:documentation
-     "Specify a list of attributes in this relation which are to be deleted."
+     "specify a list of attributes in this relation which are to be deleted."
      :sexp))
-   (:label "Rename attributes:"
-    :default NIL
+   (:label "rename attributes:"
+    :default nil
     :type (:documentation
-     "To rename some of the attributes provide a list of the form (<old-attribute new-attribute>)."
+     "to rename some of the attributes provide a list of the form (<old-attribute new-attribute>)."
      :sexp))
-   (:label "Implementation Type:"
-    :default NIL
+   (:label "implementation type:"
+    :default nil
     :type (:documentation
-     "To change the implementation type of this relation specify a new value."
+     "to change the implementation type of this relation specify a new value."
      :sexp))
-   (:label "Storage structure:"
-    :default NIL
+   (:label "storage structure:"
+    :default nil
     :type (:documentation
-     "To change the storage structure of this relation specify a new value."
+     "to change the storage structure of this relation specify a new value."
      :sexp))
-   (:label "Format:"
-    :default NIL
+   (:label "format:"
+    :default nil
     :type (:documentation
-     "To change the format for this relation specify a new format as a list of values."
+     "to change the format for this relation specify a new format as a list of values."
      :sexp))
-   (:label "Key:"
-    :default NIL
+   (:label "key:"
+    :default nil
     :type (:documentation
-     "To change the key for this relation specify a new key as a list of attributes."
+     "to change the key for this relation specify a new key as a list of attributes."
      :sexp))
-   (:label "Directory Name:"
-    :default NIL
+   (:label "directory name:"
+    :default nil
     :type (:documentation
-        "To change the save directory for this relation specify a new directory."
+        "to change the save directory for this relation specify a new directory."
      :sexp))
-   (:label "Documentation:"
-    :default NIL
+   (:label "documentation:"
+    :default nil
     :type (:documentation
-      "New documentation for the relation."
+      "new documentation for the relation."
       :string))
-  :label "Give parameters for MODIFY RELATION:")
-      :menus ((command-menu :COLUMN "Manipulation"))
-      :documentation "Used to modify the features a relation."
-      :keys ((#\SUPER-M #\SUPER-R)))
-  (SEND *output-window*
+  :label "give parameters for modify relation:")
+      :menus ((command-menu :column "manipulation"))
+      :documentation "used to modify the features a relation."
+      :keys ((#\super-m #\super-r)))
+  (send *output-window*
 :append-item
-(FORMAT nil "~S"
-(LIST 'MODIFY-RELATION rel
-      (SETQ keywords (LIST 'relation new-rel
+(format nil "~s"
+(list 'modify-relation rel
+      (setq keywords (list 'relation new-rel
      'add-attributes add-att
      'delete-attributes del-att
      'rename-attributes ren-att
@@ -1419,107 +1425,107 @@
      'doc doc
      'dir dir
      )))))
-  (MODIFY-RELATION rel keywords))
+  (modify-relation rel keywords))
 ;**************************************************************************
-;                DEFCOMMAND  FOR DEFINE ENVIRONMENT                                *
+;                defcommand  for define environment                                *
 ;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC define-environment) (environment save dir err par-check
+(ucl:defcommand (dbms-rc define-environment) (environment save dir err par-check
         rel-imp rel-sto status sys-imp
         sys-sto val-check warn
-        &AUX keywords)
-    `(:description ,(STRING-APPEND (DOCUMENTATION 'define-environment)
-     (FORMAT NIL "  ~S"
-      (CONS
+        &aux keywords)
+    `(:description ,(string-append (documentation 'define-environment)
+     (format nil "  ~s"
+      (cons
         'define-environment
-        (ARGLIST 'define-environment))))
-      :arguments (:user-supplied (:label "Environment Name:"
+        (arglist 'define-environment))))
+      :arguments (:user-supplied (:label "environment name:"
     :default nil
     :type (:documentation
-      "Name of the environment."
+      "name of the environment."
       :sexp))
-   (:label "Auto save:"
+   (:label "auto save:"
     :default nil
     :type (:documentation
-     "Automatically saves all the modified relations after each function." :boolean))
+     "automatically saves all the modified relations after each function." :boolean))
    ,*ucl-dir*
-   (:label "Errors:"
-    :default T
+   (:label "errors:"
+    :default t
     :type (:documentation
-      "Controls the printing of the error messages."
+      "controls the printing of the error messages."
       :boolean))
-   (:label "Parameter Checking:"
-    :default T
+   (:label "parameter checking:"
+    :default t
     :type (:documentation
-      "Controls the checking of the parameters."
+      "controls the checking of the parameters."
       :boolean))
-   (:label "Relation Implementation:"
+   (:label "relation implementation:"
     :default *ui-imp*
     :type (:documentation
-      "Default implementation of the user relations."
+      "default implementation of the user relations."
       :sexp))
-   (:label "Relation storage structure:"
+   (:label "relation storage structure:"
     :default *ui-ss*
     :type (:documentation
-      "Default storage structure for the user relations."
+      "default storage structure for the user relations."
       :sexp))
-   (:label "Status:"
-    :default T
+   (:label "status:"
+    :default t
     :type (:documentation
-      "Controls the printing of the status messages."
+      "controls the printing of the status messages."
       :boolean))
-   (:label "System Implementation:"
+   (:label "system implementation:"
     :default nil
     :type (:documentation
-      "Default implementation of the system relations. Can not change this when a database is active."
+      "default implementation of the system relations. can not change this when a database is active."
       :sexp))
-   (:label "System storage structure:"
+   (:label "system storage structure:"
     :default nil
     :type (:documentation
-      "Default storage structure for the system relations. Can not change this when a database is active."
+      "default storage structure for the system relations. can not change this when a database is active."
       :sexp))
-   (:label "Validity Checking:"
-    :default T
+   (:label "validity checking:"
+    :default t
     :type (:documentation
-      "Controls the checking of the values during insertion and modification for validity."
+      "controls the checking of the values during insertion and modification for validity."
       :boolean))
-   (:label "Warnings:"
-    :default T
+   (:label "warnings:"
+    :default t
      :type (:documentation
-      "Controls the printing of the warning messages."
+      "controls the printing of the warning messages."
       :boolean))
-  :label "Give parameters for DEFINE ENVIRONMENT:")
-      :menus ((command-menu :COLUMN "Definition"))
-      :documentation "Used to define an environment in a given directory."
-      :keys ((#\SUPER-D #\SUPER-E)))
-  (SEND *output-window*
+  :label "give parameters for define environment:")
+      :menus ((command-menu :column "definition"))
+      :documentation "used to define an environment in a given directory."
+      :keys ((#\super-d #\super-e)))
+  (send *output-window*
 :append-item
-(FORMAT nil "~S"
-(LIST 'DEFENV environment
-      (SETQ keywords (IF *active-db*
-   (LIST 'auto-save save 'para par-check
+(format nil "~s"
+(list 'defenv environment
+      (setq keywords (if *active-db*
+   (list 'auto-save save 'para par-check
      'dir dir 'rel-imp rel-imp 'rel-sto
      rel-sto 'errors err 'status status
      'validity val-check 'warnings warn)
-        (LIST 'auto-save save 'para par-check
+        (list 'auto-save save 'para par-check
      'dir dir 'rel-imp rel-imp 'rel-sto
      rel-sto 'errors err 'status status
      'sys-imp sys-imp 'sys-sto sys-sto
      'validity val-check 'warnings warn))))))
-  (DEFENV environment keywords))
+  (defenv environment keywords))
 ;**************************************************************************
-;                DEFCOMMAND  FOR DEFINE RELATION                                   *
+;                defcommand  for define relation                                   *
 ;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC define-relation) (relation attr-des tup
-     dir doc key imp ss &AUX keywords)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'define-relation)
-     (FORMAT NIL "  ~S"
-      (CONS
+(ucl:defcommand (dbms-rc define-relation) (relation attr-des tup
+     dir doc key imp ss &aux keywords)
+            `(:description ,(string-append (documentation 'define-relation)
+     (format nil "  ~s"
+      (cons
         'define-relation
-        (ARGLIST 'define-relation))))
-      :arguments (:user-supplied (:label "Relation Name:"
+        (arglist 'define-relation))))
+      :arguments (:user-supplied (:label "relation name:"
     :default nil
     :type (:documentation
-     "Name of the relation to be defined."
+     "name of the relation to be defined."
      :sexp))
    ,*ucl-attr-desc*
    ,*ucl-format*
@@ -1528,149 +1534,149 @@
    ,*ucl-key*
    ,*ucl-imp*
    ,*ucl-sto*
-     :label "Give parameters for DEFINE RELATION:")
-      :menus ((command-menu :COLUMN "Definition"))
+     :label "give parameters for define relation:")
+      :menus ((command-menu :column "definition"))
       :documentation "used to define a relation."
-      :keys ((#\SUPER-D #\SUPER-R)))
-  (SEND *output-window* :append-item (FORMAT nil "~S"
-(LIST 'DEFREL
+      :keys ((#\super-d #\super-r)))
+  (send *output-window* :append-item (format nil "~s"
+(list 'defrel
       relation attr-des
-      (SETQ keywords
-    (LIST 'tuple-format tup 'dir dir 'doc doc
+      (setq keywords
+    (list 'tuple-format tup 'dir dir 'doc doc
   'key key 'imp imp 'sto ss)))))
-  (DEFREL relation attr-des keywords))
+  (defrel relation attr-des keywords))
 ;**************************************************************************
-;                DEFCOMMAND  FOR DEFINE VIEW *
+;                defcommand  for define view *
 ;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC define-view) (viewname view-definition doc)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'define-view)
-     (FORMAT NIL "  ~S"
-      (CONS
+(ucl:defcommand (dbms-rc define-view) (viewname view-definition doc)
+            `(:description ,(string-append (documentation 'define-view)
+     (format nil "  ~s"
+      (cons
         'define-view
-        (ARGLIST 'define-view))))
-      :arguments (:user-supplied (:label "View Name:"
+        (arglist 'define-view))))
+      :arguments (:user-supplied (:label "view name:"
     :default nil
     :type (:documentation
-       "Specify a name for the view."
+       "specify a name for the view."
      :sexp))
-   (:label "View Definition:"
+   (:label "view definition:"
     :default *ui-viewdef*
     :type (:documentation
-       "Specify a definition for the view."
+       "specify a definition for the view."
      :sexp))
-   (:label "View Documentation:"
+   (:label "view documentation:"
     :default nil
     :type (:documentation
-       "Specify documentation for the view."
+       "specify documentation for the view."
      :sexp))
- :label "Give parameters for DEFINE VIEW:")
-      :menus ((command-menu :COLUMN "Definition"))
-      :documentation "Used to define a view."
-      :keys ((#\SUPER-D #\SUPER-V)))
-  (SEND *output-window* :append-item (FORMAT nil "~S"
-(LIST 'DEFVIEW viewname view-definition doc)))
-  (DEFVIEW viewname view-definition doc))
+ :label "give parameters for define view:")
+      :menus ((command-menu :column "definition"))
+      :documentation "used to define a view."
+      :keys ((#\super-d #\super-v)))
+  (send *output-window* :append-item (format nil "~s"
+(list 'defview viewname view-definition doc)))
+  (defview viewname view-definition doc))
 ;**************************************************************************
-;                DEFCOMMAND  FOR DEFINE ATTRIBUTE                                  *
+;                defcommand  for define attribute                                  *
 ;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC define-attribute) (relation-name attr-des key
-      &AUX keywords)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'define-attribute)
-     (FORMAT NIL "  ~S"
-      (CONS
+(ucl:defcommand (dbms-rc define-attribute) (relation-name attr-des key
+      &aux keywords)
+            `(:description ,(string-append (documentation 'define-attribute)
+     (format nil "  ~s"
+      (cons
         'define-attribute
-        (ARGLIST 'define-attribute))))
-      :arguments (:user-supplied (:label "Relation name: "
+        (arglist 'define-attribute))))
+      :arguments (:user-supplied (:label "relation name: "
     :default *ui-relation*
     :type (:documentation
-       "The name of the relation to which new attributes are to be added." :SEXP))
+       "the name of the relation to which new attributes are to be added." :sexp))
    ,*ucl-attr-desc*
-   (:label "Key: "
+   (:label "key: "
     :default nil
     :type (:documentation
-       "New key for the relation if it is to be different from the previous value. Specify a list of attributes."
-       :SEXP))
- :label "Give parameters for DEFINE ATTRIBUTE:")
-      :menus ((command-menu :COLUMN "Definition"))
-      :documentation "Used to add attributes to relations."
-      :keys ((#\SUPER-D #\SUPER-A)))
-  (SEND *output-window* :append-item (FORMAT nil "~S"
-(LIST 'DEFINE-ATTRIBUTE relation-name attr-des
-      (SETQ keywords (LIST 'key key)))))
-  (DEFINE-ATTRIBUTE relation-name attr-des keywords))
+       "new key for the relation if it is to be different from the previous value. specify a list of attributes."
+       :sexp))
+ :label "give parameters for define attribute:")
+      :menus ((command-menu :column "definition"))
+      :documentation "used to add attributes to relations."
+      :keys ((#\super-d #\super-a)))
+  (send *output-window* :append-item (format nil "~s"
+(list 'define-attribute relation-name attr-des
+      (setq keywords (list 'key key)))))
+  (define-attribute relation-name attr-des keywords))
 ;**************************************************************************
-;                DEFCOMMAND  FOR MODIFY TUPLES                                     *
+;                defcommand  for modify tuples                                     *
 ;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC modify-tuples) (relation where-clause attributes values
-     &AUX keywords)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'modify-tuples)
-     (FORMAT NIL "  ~S"
-      (CONS
+(ucl:defcommand (dbms-rc modify-tuples) (relation where-clause attributes values
+     &aux keywords)
+            `(:description ,(string-append (documentation 'modify-tuples)
+     (format nil "  ~s"
+      (cons
         'modify-tuples
-        (ARGLIST 'modify-tuples))))
-      :arguments (:user-supplied (:label "Relation: "
+        (arglist 'modify-tuples))))
+      :arguments (:user-supplied (:label "relation: "
     :default *ui-relation*
     :type (:documentation
-       "Specify the relation whose tuples are to be modified."
+       "specify the relation whose tuples are to be modified."
      :sexp))
    ,*ucl-where*
-   (:label "Attributes: "
+   (:label "attributes: "
     :default *ui-attributes*
     :type (:documentation
-       "Specify a list of attributes in the above relation to be modified." :sexp))
-   (:label "Values: "
+       "specify a list of attributes in the above relation to be modified." :sexp))
+   (:label "values: "
     :default *ui-values*
     :type (:documentation
-       "Specify a corresponding list of values to modify the above attributes." :sexp))
- :label "Give parameters for MODIFY TUPLES ==>")
-      :menus ((command-menu :COLUMN "Manipulation"))
-      :documentation "Used to modify tuples in a relation."
-      :keys ((#\SUPER-M #\HYPER-M)))
-  (SEND *output-window* :append-item (FORMAT nil "~S"
-(LIST 'MODIFY relation (SETQ keywords (LIST 'where where-clause
+       "specify a corresponding list of values to modify the above attributes." :sexp))
+ :label "give parameters for modify tuples ==>")
+      :menus ((command-menu :column "manipulation"))
+      :documentation "used to modify tuples in a relation."
+      :keys ((#\super-m #\hyper-m)))
+  (send *output-window* :append-item (format nil "~s"
+(list 'modify relation (setq keywords (list 'where where-clause
        'attr attributes
        'values values)))))
-  (MODIFY relation keywords))
+  (modify relation keywords))
 ;**************************************************************************
-;                DEFCOMMAND  FOR DELETE TUPLES                                     *
+;                defcommand  for delete tuples                                     *
 ;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC delete-tuples) (relation where-clause)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'delete-tuples)
-     (FORMAT NIL "  ~S"
-      (CONS
+(ucl:defcommand (dbms-rc delete-tuples) (relation where-clause)
+            `(:description ,(string-append (documentation 'delete-tuples)
+     (format nil "  ~s"
+      (cons
         'delete-tuples
-        (ARGLIST 'delete-tuples))))
-      :arguments (:user-supplied (:label "Relation: "
+        (arglist 'delete-tuples))))
+      :arguments (:user-supplied (:label "relation: "
     :default *ui-relation*
     :type (:documentation
-       "Specify a relation whose tuples are to be deleted."
+       "specify a relation whose tuples are to be deleted."
      :sexp))
-   (:label "Where clause: "
+   (:label "where clause: "
     :default nil
     :type (:documentation
-       "Deletes the tuples which satisfy this condition."
+       "deletes the tuples which satisfy this condition."
      :sexp))
- :label "Give parameters for DELETE TUPLES ==>")
-      :menus ((command-menu :COLUMN "Manipulation"))
-      :documentation "Used to delete tuples in a relation."
-      :keys (#\HYPER-D))
-  (SEND *output-window* :append-item (FORMAT nil "~S"
-(LIST 'DELETE-TUPLES relation (LIST 'where where-clause))))
-  (DELETE-TUPLES  relation (LIST 'where where-clause)))
+ :label "give parameters for delete tuples ==>")
+      :menus ((command-menu :column "manipulation"))
+      :documentation "used to delete tuples in a relation."
+      :keys (#\hyper-d))
+  (send *output-window* :append-item (format nil "~s"
+(list 'delete-tuples relation (list 'where where-clause))))
+  (delete-tuples  relation (list 'where where-clause)))
 ;**************************************************************************
-;                DEFCOMMAND  FOR RETRIEVE TUPLES                                   *
+;                defcommand  for retrieve tuples                                   *
 ;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC retrieve-tuples) (relation attributes where-clause
+(ucl:defcommand (dbms-rc retrieve-tuples) (relation attributes where-clause
      into dir doc key imp sto
      qprint to-file sort
      format wide number print
      tuples qsort stream unique index-name
-     &AUX keywords)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'retrieve)
-       (FORMAT NIL "  ~S"
-      (CONS
+     &aux keywords)
+            `(:description ,(string-append (documentation 'retrieve)
+       (format nil "  ~s"
+      (cons
         'retrieve
-        (ARGLIST 'retrieve))))
+        (arglist 'retrieve))))
       :arguments (:user-supplied ,*ucl-retrieve-rel*
    ,*ucl-attributes*
    ,*ucl-where*
@@ -1692,42 +1698,42 @@
    ,*ucl-stream*
    ,*ucl-unique*
     ,*ucl-index-name*
- :label "Give parameters for RETRIEVE TUPLES ==>")
-      :menus ((command-menu :COLUMN "Operators"))
-      :documentation "Used to Retrieve tuples in a relation."
-      :keys (#\HYPER-R))
-  (SEND *output-window* :append-item
-(FORMAT nil "~S"
-(LIST 'RETRIEVE
+ :label "give parameters for retrieve tuples ==>")
+      :menus ((command-menu :column "operators"))
+      :documentation "used to retrieve tuples in a relation."
+      :keys (#\hyper-r))
+  (send *output-window* :append-item
+(format nil "~s"
+(list 'retrieve
       relation
-      (SETQ keywords
-    (LIST 'project
-   (IF (EQUAL attributes T)
-       NIL
+      (setq keywords
+    (list 'project
+   (if (equal attributes t)
+       nil
      attributes)
    'where where-clause 'into into
    'dir dir 'doc doc 'key key 'imp imp 'sto sto
-    'qprint (NOT qprint) 'output-to-file to-file
+    'qprint (not qprint) 'output-to-file to-file
    'sort sort 'format format
    'wide wide 'num number
    'print print 'tuples tuples
    'quick-sort qsort 'stream stream
    'unique unique 'index-name index-name)))))
-  (RETRIEVE relation keywords))
+  (retrieve relation keywords))
 ;**************************************************************************
-;                DEFCOMMAND  FOR SELECT TUPLES                                     *
+;                defcommand  for select tuples                                     *
 ;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC select) (relation where-clause
+(ucl:defcommand (dbms-rc select) (relation where-clause
      into dir doc key imp sto
      qprint to-file sort
      format wide number print
      tuples qsort stream unique index-name
-     &AUX keywords)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'select-tuples)
-     (FORMAT NIL "  ~S"
-      (CONS
+     &aux keywords)
+            `(:description ,(string-append (documentation 'select-tuples)
+     (format nil "  ~s"
+      (cons
         'select-tuples
-        (ARGLIST 'select-tuples))))
+        (arglist 'select-tuples))))
       :arguments (:user-supplied ,*ucl-retrieve-rel*
    ,*ucl-where*
    ,*ucl-into*
@@ -1748,39 +1754,39 @@
    ,*ucl-stream*
    ,*ucl-unique*
    ,*ucl-index-name*
- :label "Give parameters for SELECT TUPLES ==>")
-      :menus ((command-menu :COLUMN "Operators"))
-      :documentation "Used to Select tuples in a relation."
-      :keys ((#\SUPER-R #\SUPER-S)))
-  (SEND *output-window* :append-item
-(FORMAT nil "~S"
-(LIST 'SELECT-TUPLES
+ :label "give parameters for select tuples ==>")
+      :menus ((command-menu :column "operators"))
+      :documentation "used to select tuples in a relation."
+      :keys ((#\super-r #\super-s)))
+  (send *output-window* :append-item
+(format nil "~s"
+(list 'select-tuples
       relation
-      (SETQ keywords
-    (LIST
+      (setq keywords
+    (list
    'where where-clause 'into into
    'dir dir 'doc doc 'key key 'imp imp 'sto sto
-   'qprint (NOT qprint) 'output-to-file to-file
+   'qprint (not qprint) 'output-to-file to-file
    'sort sort 'format format
    'wide wide 'num number
    'print print 'tuples tuples
    'quick-sort qsort 'stream stream
    'unique unique 'index-name index-name)))))
-  (RETRIEVE relation (APPEND (LIST 'project nil) keywords)))
+  (retrieve relation (append (list 'project nil) keywords)))
 ;**************************************************************************
-;                DEFCOMMAND  FOR PROJECT TUPLES                                    *
+;                defcommand  for project tuples                                    *
 ;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC Project) (relation attributes
+(ucl:defcommand (dbms-rc project) (relation attributes
       into dir doc key imp sto
       qprint to-file sort
       format wide number print tuples
       qsort stream unique
-      &AUX keywords)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'project)
-     (FORMAT NIL "  ~S"
-      (CONS
+      &aux keywords)
+            `(:description ,(string-append (documentation 'project)
+     (format nil "  ~s"
+      (cons
         'project
-        (ARGLIST
+        (arglist
           'project))))
       :arguments (:user-supplied ,*ucl-retrieve-rel*
    ,*ucl-attributes*
@@ -1801,89 +1807,89 @@
    ,*ucl-quick-sort*
    ,*ucl-stream*
    ,*ucl-unique*
- :label "Give parameters for PROJECT TUPLES ==>")
-      :menus ((command-menu :COLUMN "Operators"))
-      :documentation "Used to Project tuples in a relation."
-      :keys ((#\SUPER-R #\SUPER-P)))
-  (SEND *output-window* :append-item
-(FORMAT nil "~S"
-(LIST 'PROJECT
+ :label "give parameters for project tuples ==>")
+      :menus ((command-menu :column "operators"))
+      :documentation "used to project tuples in a relation."
+      :keys ((#\super-r #\super-p)))
+  (send *output-window* :append-item
+(format nil "~s"
+(list 'project
       relation
-      (SETQ keywords
-    (LIST 'project (IF (EQUAL attributes T)
+      (setq keywords
+    (list 'project (if (equal attributes t)
    nil
         attributes)
     'into into 'dir dir 'doc doc 'key key 'imp imp 'sto sto
-    'qprint (NOT qprint) 'output-to-file to-file
+    'qprint (not qprint) 'output-to-file to-file
     'sort sort 'format format
     'wide wide 'num number 'print print 'tuples tuples
     'quick-sort qsort 'stream stream 'unique unique)))))
-  (RETRIEVE relation (APPEND (LIST 'where t) keywords)))
+  (retrieve relation (append (list 'where t) keywords)))
 ;**************************************************************************
-;                DEFCOMMAND  FOR COMMIT TRANSACTION                                *
+;                defcommand  for commit transaction                                *
 ;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC commit-transaction) (trans dir path &AUX keywords)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'commit-transaction)
-     (FORMAT NIL "  ~S"
-      (CONS
+(ucl:defcommand (dbms-rc commit-transaction) (trans dir path &aux keywords)
+            `(:description ,(string-append (documentation 'commit-transaction)
+     (format nil "  ~s"
+      (cons
         'commit-transaction
-        (ARGLIST
+        (arglist
           'commit-transaction))))
-      :arguments (:user-supplied (:label "Name of the transaction :"
+      :arguments (:user-supplied (:label "name of the transaction :"
     :default *ui-transaction*
     :type (:documentation
-       "The name of an existing transaction." :SEXP))
-   (:label "Name of the directory:"
+       "the name of an existing transaction." :sexp))
+   (:label "name of the directory:"
     :default *ui-directory*
     :type (:documentation
-       "Name of the directory which contains the transaction file, if the transaction is not in the memory." :SEXP))
-   (:label "Pathname:"
+       "name of the directory which contains the transaction file, if the transaction is not in the memory." :sexp))
+   (:label "pathname:"
     :default *ui-file*
     :type (:documentation
-    "If the transaction is not in memory, provide the pathname for the transaction file. It defaults to <transaction>.lisp." :SEXP))
- :label "Give parameters for COMMIT TRANSACTION")
-      :menus ((command-menu :COLUMN "Operators"))
-      :documentation "Commit a transaction - execute all the database calls in it."
-      :keys ((#\SUPER-T #\SUPER-C)))
-  (SEND *output-window* :append-item
-(FORMAT nil "~S"
-(LIST 'COMMIT-TRANSACTION trans (SETQ keywords
-         (LIST 'dir dir
+    "if the transaction is not in memory, provide the pathname for the transaction file. it defaults to <transaction>.lisp." :sexp))
+ :label "give parameters for commit transaction")
+      :menus ((command-menu :column "operators"))
+      :documentation "commit a transaction - execute all the database calls in it."
+      :keys ((#\super-t #\super-c)))
+  (send *output-window* :append-item
+(format nil "~s"
+(list 'commit-transaction trans (setq keywords
+         (list 'dir dir
         'path path)))))
-  (COMMIT-TRANSACTION trans keywords)
+  (commit-transaction trans keywords)
 )
 ;**************************************************************************
-;                DEFCOMMAND  FOR JOIN        *
+;                defcommand  for join        *
 ;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC join) (into from project where
+(ucl:defcommand (dbms-rc join) (into from project where
       tuples format dir doc key imp sto
-             print unique &AUX keywords)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'join)
-     (FORMAT NIL "  ~S"
-      (CONS
+             print unique &aux keywords)
+            `(:description ,(string-append (documentation 'join)
+     (format nil "  ~s"
+      (cons
         'join
-        (ARGLIST
+        (arglist
           'join))))
-      :arguments (:user-supplied (:label "Output relation :"
+      :arguments (:user-supplied (:label "output relation :"
     :default *ui-join-into*
     :type (:documentation
-       "If not provided, the result of JOIN is stored in a temporary relation unless only the resultant tuples are requested." :SEXP))
-   (:LABEL "FROM :"
-    :DEFAULT *ui-from*
-    :TYPE (:DOCUMENTATION
-     "Specify a list of two relations to be joined." :SEXP))
-   (:label "Project :"
-    :default NIL
+       "if not provided, the result of join is stored in a temporary relation unless only the resultant tuples are requested." :sexp))
+   (:label "from :"
+    :default *ui-from*
     :type (:documentation
-       "This gives the attributes in the output relation. Example: (rel1.* a3 (rel2.a1 a4)) ==> All the attributes in rel1, attribute A3 of rel2 and atribute A1 of rel2 renamed as A4." :SEXP))
-   (:label "Where :"
+     "specify a list of two relations to be joined." :sexp))
+   (:label "project :"
+    :default nil
+    :type (:documentation
+       "this gives the attributes in the output relation. example: (rel1.* a3 (rel2.a1 a4)) ==> all the attributes in rel1, attribute a3 of rel2 and atribute a1 of rel2 renamed as a4." :sexp))
+   (:label "where :"
     :default *ui-over*
     :type (:documentation
-     "The join clause using the theta-operators. It is a where clause consisting of attributes from the relations being joined." :SEXP))
-   (:label "Tuples?"
-    :default NIL
+     "the join clause using the theta-operators. it is a where clause consisting of attributes from the relations being joined." :sexp))
+   (:label "tuples?"
+    :default nil
     :type (:documentation
-     "Specify if the resultant tuples be returned rather than inserted in a relation. The following parameters can be ignored if this is true."
+     "specify if the resultant tuples be returned rather than inserted in a relation. the following parameters can be ignored if this is true."
      :boolean))
    ,*ucl-format*
    ,*ucl-dir*
@@ -1893,14 +1899,14 @@
    ,*ucl-sto*
    ,*ucl-print*
    ,*ucl-unique*
- :label "Give parameters for JOIN")
-      :menus ((command-menu :COLUMN "Operators"))
-      :documentation "Used to join relations."
-      :keys (#\SUPER-J))
-  (SEND *output-window* :append-item
-(FORMAT nil "~S"
-(LIST 'JOIN 'from from
-      (SETQ keywords (LIST 'project project
+ :label "give parameters for join")
+      :menus ((command-menu :column "operators"))
+      :documentation "used to join relations."
+      :keys (#\super-j))
+  (send *output-window* :append-item
+(format nil "~s"
+(list 'join 'from from
+      (setq keywords (list 'project project
      'into into
      'tuples tuples
      'format format
@@ -1911,232 +1917,232 @@
      'sto sto
      'print print
      'where where 'unique unique)))))
-  (JOIN-INTERNAL (APPEND (LIST 'from from) keywords))
+  (join-internal (append (list 'from from) keywords))
 )
 ;**************************************************************************
-;                DEFCOMMAND  FOR DESTROY DATABASE                                 *
+;                defcommand  for destroy database                                 *
 ;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC destroy-database) (database disk &AUX keywords)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'destroy-database)
-     (FORMAT NIL "  ~S"
-      (CONS
+(ucl:defcommand (dbms-rc destroy-database) (database disk &aux keywords)
+            `(:description ,(string-append (documentation 'destroy-database)
+     (format nil "  ~s"
+      (cons
         'destroy-database
-        (ARGLIST
+        (arglist
           'destroy-database))))
-      :arguments (:user-supplied (:label "Database Name:"
+      :arguments (:user-supplied (:label "database name:"
     :default nil
     :type (:documentation
-       "Name of the database to be destroyed." :SEXP))
-   (:label "Delete from the DISK:"
-    :default NIL
+       "name of the database to be destroyed." :sexp))
+   (:label "delete from the disk:"
+    :default nil
     :type (:documentation
-     "IF YES all the files pertaining to this database are deleted but NOT EXPUNGED." :BOOLEAN))
- :label "Give parameters for DESTROY DATABASE:")
-      :menus ((command-menu :COLUMN "Manipulation"))
-      :documentation "Used to destroy databases"
-      :keys ((#\SUPER-K #\SUPER-D)))
-  (SEND *output-window* :append-item
-(FORMAT nil "~S"
-(LIST 'DESTROY-DATABASE database
-      (SETQ keywords (LIST 'disk disk)))))
-  (DESTROY-DATABASE database keywords)
+     "if yes all the files pertaining to this database are deleted but not expunged." :boolean))
+ :label "give parameters for destroy database:")
+      :menus ((command-menu :column "manipulation"))
+      :documentation "used to destroy databases"
+      :keys ((#\super-k #\super-d)))
+  (send *output-window* :append-item
+(format nil "~s"
+(list 'destroy-database database
+      (setq keywords (list 'disk disk)))))
+  (destroy-database database keywords)
 )
 ;**************************************************************************
-;                DEFCOMMAND  FOR DESTROY DOMAIN                                    *
+;                defcommand  for destroy domain                                    *
 ;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC destroy-domain) (domain)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'destroy-domain)
-     (FORMAT NIL "  ~S"
-      (CONS
+(ucl:defcommand (dbms-rc destroy-domain) (domain)
+            `(:description ,(string-append (documentation 'destroy-domain)
+     (format nil "  ~s"
+      (cons
         'destroy-domain
-        (ARGLIST
+        (arglist
           'destroy-domain))))
-      :arguments (:user-supplied (:label "Domain Name:"
+      :arguments (:user-supplied (:label "domain name:"
     :default nil
     :type (:documentation
-       "Name of the domain to be destroyed." :SEXP))
- :label "Give parameters for DESTROY DOMAIN:")
-      :menus ((command-menu :COLUMN "Manipulation"))
-      :documentation "Used to destroy domains."
-      :keys (#\SUPER-HYPER-K))
-  (SEND *output-window* :append-item
-(FORMAT nil "~S"
-(LIST 'DESTROY-DOMAIN domain)))
-  (DESTROY-DOMAIN domain))
+       "name of the domain to be destroyed." :sexp))
+ :label "give parameters for destroy domain:")
+      :menus ((command-menu :column "manipulation"))
+      :documentation "used to destroy domains."
+      :keys (#\super-hyper-k))
+  (send *output-window* :append-item
+(format nil "~s"
+(list 'destroy-domain domain)))
+  (destroy-domain domain))
 ;**************************************************************************
-;                DEFCOMMAND  FOR DESTROY IMPLEMENTATION                            *
+;                defcommand  for destroy implementation                            *
 ;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC destroy-implementation) (implementation)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'destroy-implementation)
-     (FORMAT NIL "  ~S"
-      (CONS
+(ucl:defcommand (dbms-rc destroy-implementation) (implementation)
+            `(:description ,(string-append (documentation 'destroy-implementation)
+     (format nil "  ~s"
+      (cons
         'destroy-implementation
-        (ARGLIST
+        (arglist
           'destroy-implementation))))
-      :arguments (:user-supplied (:label "Implementation Name:"
+      :arguments (:user-supplied (:label "implementation name:"
     :default nil
     :type (:documentation
-       "Name of the implementation to be destroyed." :SEXP))
- :label "Give parameters for DESTROY IMPLEMENTATION:")
-      :menus ((command-menu :COLUMN "Manipulation"))
-      :documentation "Used to destroy implementations."
-      :keys ((#\SUPER-K #\SUPER-I)))
-  (SEND *output-window* :append-item
-(FORMAT nil "~S"
-(LIST 'DESTROY-IMPLEMENTATION implementation)))
-  (DESTROY-IMPLEMENTATION implementation))
+       "name of the implementation to be destroyed." :sexp))
+ :label "give parameters for destroy implementation:")
+      :menus ((command-menu :column "manipulation"))
+      :documentation "used to destroy implementations."
+      :keys ((#\super-k #\super-i)))
+  (send *output-window* :append-item
+(format nil "~s"
+(list 'destroy-implementation implementation)))
+  (destroy-implementation implementation))
 ;**************************************************************************
-;                DEFCOMMAND  FOR DESTROY INDEX                            *
+;                defcommand  for destroy index                            *
 ;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC DESTROY-INDEX) (relation-name index-name)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'destroy-index)
-     (FORMAT NIL "  ~S"
-      (CONS
+(ucl:defcommand (dbms-rc destroy-index) (relation-name index-name)
+            `(:description ,(string-append (documentation 'destroy-index)
+     (format nil "  ~s"
+      (cons
         'destroy-index
-        (ARGLIST
+        (arglist
           'destroy-index))))
-      :arguments (:user-supplied (:label "Relation Name:"
+      :arguments (:user-supplied (:label "relation name:"
     :default nil
     :type (:documentation
-       "Name of the relation on which the index to be destroyed is defined." :SEXP))
-   (:label "Index Name:"
+       "name of the relation on which the index to be destroyed is defined." :sexp))
+   (:label "index name:"
     :default nil
     :type (:documentation
-       "Name of the index to be destroyed." :SEXP))
-     :label "Give parameters for DESTROY INDEX:")
-      :menus ((command-menu :COLUMN "Manipulation"))
-      :documentation "Used to destroy indices."
-      :keys ((#\SUPER-K #\HYPER-I)))
-  (SEND *output-window* :append-item
-(FORMAT nil "~S"
-(LIST 'DESTROY-INDEX relation-name index-name)))
-  (DESTROY-INDEX relation-name index-name))
+       "name of the index to be destroyed." :sexp))
+     :label "give parameters for destroy index:")
+      :menus ((command-menu :column "manipulation"))
+      :documentation "used to destroy indices."
+      :keys ((#\super-k #\hyper-i)))
+  (send *output-window* :append-item
+(format nil "~s"
+(list 'destroy-index relation-name index-name)))
+  (destroy-index relation-name index-name))
 ;**************************************************************************
-;                DEFCOMMAND  FOR DESTROY STORAGE STRUCTURE                         *
+;                defcommand  for destroy storage structure                         *
 ;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC destroy-storage-structure) (storage-structure)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'destroy-storage-structure)
-     (FORMAT NIL "  ~S"
-      (CONS
+(ucl:defcommand (dbms-rc destroy-storage-structure) (storage-structure)
+            `(:description ,(string-append (documentation 'destroy-storage-structure)
+     (format nil "  ~s"
+      (cons
         'destroy-storage-structure
-        (ARGLIST
+        (arglist
           'destroy-storage-structure))))
-      :arguments (:user-supplied (:label "Storage structure name:"
+      :arguments (:user-supplied (:label "storage structure name:"
     :default nil
     :type (:documentation
-       "Name of the storage structure to be destroyed." :SEXP))
- :label "Give parameters for DESTROY STORAGE STRUCTURE:")
-      :menus ((command-menu :COLUMN "Manipulation"))
-      :documentation "Used to destroy storage structures."
-      :keys ((#\SUPER-K #\SUPER-S)))
-  (SEND *output-window* :append-item
-(FORMAT nil "~S"
-(LIST 'DESTROY-STORAGE-STRUCTURE storage-structure)))
-  (DESTROY-STORAGE-STRUCTURE storage-structure))
+       "name of the storage structure to be destroyed." :sexp))
+ :label "give parameters for destroy storage structure:")
+      :menus ((command-menu :column "manipulation"))
+      :documentation "used to destroy storage structures."
+      :keys ((#\super-k #\super-s)))
+  (send *output-window* :append-item
+(format nil "~s"
+(list 'destroy-storage-structure storage-structure)))
+  (destroy-storage-structure storage-structure))
 ;**************************************************************************
-;                DEFCOMMAND  FOR DESTROY VIEW                                      *
+;                defcommand  for destroy view                                      *
 ;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC destroy-view) (view)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'destroy-view)
-     (FORMAT NIL "  ~S"
-      (CONS
+(ucl:defcommand (dbms-rc destroy-view) (view)
+            `(:description ,(string-append (documentation 'destroy-view)
+     (format nil "  ~s"
+      (cons
         'destroy-view
-        (ARGLIST
+        (arglist
           'destroy-view))))
-      :arguments (:user-supplied (:label "View name:"
+      :arguments (:user-supplied (:label "view name:"
     :default nil
     :type (:documentation
-       "Name of the view to be destroyed."
-       :SEXP))
- :label "Give parameters for DESTROY VIEW:")
-      :menus ((command-menu :COLUMN "Manipulation"))
-      :documentation "Used to destroy views."
-      :keys ((#\SUPER-K #\SUPER-V)))
-  (SEND *output-window* :append-item
-(FORMAT nil "~S"
-(LIST 'DESTROY-VIEW view)))
-  (DESTROY-VIEW view))
+       "name of the view to be destroyed."
+       :sexp))
+ :label "give parameters for destroy view:")
+      :menus ((command-menu :column "manipulation"))
+      :documentation "used to destroy views."
+      :keys ((#\super-k #\super-v)))
+  (send *output-window* :append-item
+(format nil "~s"
+(list 'destroy-view view)))
+  (destroy-view view))
 ;**************************************************************************
-;                DEFCOMMAND  FOR DESTROYREL   *
+;                defcommand  for destroyrel   *
 ;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC destroy-relation) (relation disk &AUX keywords)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'destroy-relation)
-     (FORMAT NIL "  ~S"
-      (CONS
+(ucl:defcommand (dbms-rc destroy-relation) (relation disk &aux keywords)
+            `(:description ,(string-append (documentation 'destroy-relation)
+     (format nil "  ~s"
+      (cons
         'destroy-relation
-        (ARGLIST
+        (arglist
           'destroy-relation))))
-      :arguments (:user-supplied (:label "Relation Name:"
+      :arguments (:user-supplied (:label "relation name:"
     :default nil
     :type (:documentation
-       "Name of the relation to be destroyed." :SEXP))
-   (:label "Delete from the DISK:"
-    :default NIL
+       "name of the relation to be destroyed." :sexp))
+   (:label "delete from the disk:"
+    :default nil
     :type (:documentation
-     "IF YES the file corresponding to this relation is deleted but NOT EXPUNGED." :BOOLEAN))
- :label "Give parameters for DESTROY RELATION:")
-      :menus ((command-menu :COLUMN "Manipulation"))
-      :documentation "Used to destroy relations"
-      :keys ((#\SUPER-K #\SUPER-R)))
-  (SEND *output-window* :append-item
-(FORMAT nil "~S"
-(LIST 'DESTROY-RELATION
-      relation (SETQ keywords (LIST 'disk disk)))))
-  (DESTROY-RELATION relation keywords)
+     "if yes the file corresponding to this relation is deleted but not expunged." :boolean))
+ :label "give parameters for destroy relation:")
+      :menus ((command-menu :column "manipulation"))
+      :documentation "used to destroy relations"
+      :keys ((#\super-k #\super-r)))
+  (send *output-window* :append-item
+(format nil "~s"
+(list 'destroy-relation
+      relation (setq keywords (list 'disk disk)))))
+  (destroy-relation relation keywords)
 )
 ;**************************************************************************
-;                DEFCOMMAND  FOR DESTROY ATTRIBUTE                                 *
+;                defcommand  for destroy attribute                                 *
 ;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC destroy-attribute) (relation attr key &AUX keywords)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'destroy-attribute)
-     (FORMAT NIL "  ~S"
-      (CONS
+(ucl:defcommand (dbms-rc destroy-attribute) (relation attr key &aux keywords)
+            `(:description ,(string-append (documentation 'destroy-attribute)
+     (format nil "  ~s"
+      (cons
         'destroy-attribute
-        (ARGLIST
+        (arglist
           'destroy-attribute))))
-      :arguments (:user-supplied (:label "Relation Name:"
+      :arguments (:user-supplied (:label "relation name:"
     :default nil
     :type (:documentation
-       "Name of the relation from which attributes are to be destroyed." :SEXP))
-   (:label "Attributes:"
+       "name of the relation from which attributes are to be destroyed." :sexp))
+   (:label "attributes:"
     :default nil
     :type (:documentation
-       "List of attributes to destroy." :SEXP))
-   (:label "Key:"
-    :default NIL
+       "list of attributes to destroy." :sexp))
+   (:label "key:"
+    :default nil
     :type (:documentation
-     "New key for the relation if it is to be different from the previous value or if any of the key attributes are destroyed." :SEXP))
- :label "Give parameters for DESTROY ATTRIBUTE:")
-      :menus ((command-menu :COLUMN "Manipulation"))
-      :documentation "Used to destroy attributes from relations"
-      :keys ((#\SUPER-K #\SUPER-A)))
-  (SEND *output-window* :append-item
-(FORMAT nil "~S"
-(LIST 'DESTROY-ATTRIBUTE relation (SETQ keywords (LIST 'attr attr
+     "new key for the relation if it is to be different from the previous value or if any of the key attributes are destroyed." :sexp))
+ :label "give parameters for destroy attribute:")
+      :menus ((command-menu :column "manipulation"))
+      :documentation "used to destroy attributes from relations"
+      :keys ((#\super-k #\super-a)))
+  (send *output-window* :append-item
+(format nil "~s"
+(list 'destroy-attribute relation (setq keywords (list 'attr attr
       'key key)))))
-  (DESTROY-ATTRIBUTE relation keywords)
+  (destroy-attribute relation keywords)
 )
 ;**************************************************************************
-;                DEFCOMMAND  FOR SET UNION   *
+;                defcommand  for set union   *
 ;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC union) (from into tuples format
+(ucl:defcommand (dbms-rc union) (from into tuples format
        dir doc key imp sto print unique
-       &AUX keywords)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'relation-union)
-     (FORMAT NIL "  ~S"
-       (CONS
+       &aux keywords)
+            `(:description ,(string-append (documentation 'relation-union)
+     (format nil "  ~s"
+       (cons
         'relation-union
-        (ARGLIST
+        (arglist
           'relation-union))))
-      :arguments (:user-supplied (:label "List of two relations:"
-    :default NIL
+      :arguments (:user-supplied (:label "list of two relations:"
+    :default nil
     :type (:documentation
-     "List of the names of two relations which will take part in the relation union operation. The attributes to be projected and a where clause can be specified for each relation using keywords. For instance, (REL1 (PROJECT <attr> WHERE <where-claue>) REL2 (WHERE <where-clause> PROJECT <attr>))." :SEXP))
+     "list of the names of two relations which will take part in the relation union operation. the attributes to be projected and a where clause can be specified for each relation using keywords. for instance, (rel1 (project <attr> where <where-claue>) rel2 (where <where-clause> project <attr>))." :sexp))
    ,*ucl-into*
-   (:label "Tuples?"
-    :default NIL
+   (:label "tuples?"
+    :default nil
     :type (:documentation
-     "Specify if the resultant tuples be returned rather than inserted in a relation. The following parameters can be ignored if this is true."
+     "specify if the resultant tuples be returned rather than inserted in a relation. the following parameters can be ignored if this is true."
      :boolean))
    ,*ucl-format*
    ,*ucl-dir*
@@ -2146,40 +2152,40 @@
    ,*ucl-sto*
    ,*ucl-print*
    ,*ucl-unique*
-  :LABEL "Parameters for the set-union of two relations")
-      :menus ((command-menu :COLUMN "Operators"))
-      :documentation "Used to form union of two compatible relations"
-      :keys ((#\SUPER-O #\SUPER-U)))
-  (SEND *output-window* :append-item
-(FORMAT nil "~S"
-(LIST 'RELATION-UNION
-      (SETQ keywords (LIST 'into into
+  :label "parameters for the set-union of two relations")
+      :menus ((command-menu :column "operators"))
+      :documentation "used to form union of two compatible relations"
+      :keys ((#\super-o #\super-u)))
+  (send *output-window* :append-item
+(format nil "~s"
+(list 'relation-union
+      (setq keywords (list 'into into
      'from from 'tuples tuples
      'format format 'dir dir 'doc doc
      'key key 'imp imp 'sto sto
      'print print 'unique unique)))))
-  (RELATION-UNION keywords))
+  (relation-union keywords))
 ;**************************************************************************
-;                DEFCOMMAND  FOR SET DIFFERENCE                                    *
+;                defcommand  for set difference                                    *
 ;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC difference) (from into tuples format
+(ucl:defcommand (dbms-rc difference) (from into tuples format
        dir doc key imp sto print unique
-       &AUX keywords)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'relation-difference)
-     (FORMAT NIL "  ~S"
-      (CONS
+       &aux keywords)
+            `(:description ,(string-append (documentation 'relation-difference)
+     (format nil "  ~s"
+      (cons
         'relation-difference
-        (ARGLIST
+        (arglist
           'relation-difference))))
-      :arguments (:user-supplied (:label "List of two relations:"
-    :default NIL
+      :arguments (:user-supplied (:label "list of two relations:"
+    :default nil
     :type (:documentation
-     "List of the names of two relations which will take part in the relation difference operation. The attributes to be projected and a where clause can be specified for each relation using keywords. For instance, (REL1 (PROJECT <attr> WHERE <where-claue>) REL2 (WHERE <where-clause> PROJECT <attr>))." :SEXP))
+     "list of the names of two relations which will take part in the relation difference operation. the attributes to be projected and a where clause can be specified for each relation using keywords. for instance, (rel1 (project <attr> where <where-claue>) rel2 (where <where-clause> project <attr>))." :sexp))
    ,*ucl-into*
-   (:label "Tuples?"
-    :default NIL
+   (:label "tuples?"
+    :default nil
     :type (:documentation
-     "Specify if the resultant tuples be returned rather than inserted in a relation. The following parameters can be ignored if this is true."
+     "specify if the resultant tuples be returned rather than inserted in a relation. the following parameters can be ignored if this is true."
      :boolean))
    ,*ucl-format*
    ,*ucl-dir*
@@ -2189,40 +2195,40 @@
    ,*ucl-sto*
    ,*ucl-print*
    ,*ucl-unique*
-  :LABEL "Parameters for the set-difference of two relations")
-      :menus ((command-menu :COLUMN "Operators"))
-      :documentation "Used to form difference of two compatible relations"
-      :keys ((#\SUPER-O #\SUPER-D)))
-  (SEND *output-window* :append-item
-(FORMAT nil "~S"
-(LIST 'RELATION-DIFFERENCE
-      (SETQ keywords (LIST 'into into
+  :label "parameters for the set-difference of two relations")
+      :menus ((command-menu :column "operators"))
+      :documentation "used to form difference of two compatible relations"
+      :keys ((#\super-o #\super-d)))
+  (send *output-window* :append-item
+(format nil "~s"
+(list 'relation-difference
+      (setq keywords (list 'into into
      'from from 'tuples tuples
      'format format 'dir dir 'doc doc
      'key key 'imp imp 'sto sto
      'print print 'unique unique)))))
-  (RELATION-DIFFERENCE keywords))
+  (relation-difference keywords))
 ;**************************************************************************
-;                DEFCOMMAND  FOR SET INTERSECTION                                  *
+;                defcommand  for set intersection                                  *
 ;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC intersection) (from into tuples format
+(ucl:defcommand (dbms-rc intersection) (from into tuples format
        dir doc key imp sto print unique
-       &AUX keywords)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'relation-intersection)
-     (FORMAT NIL "  ~S"
-      (CONS
+       &aux keywords)
+            `(:description ,(string-append (documentation 'relation-intersection)
+     (format nil "  ~s"
+      (cons
         'relation-intersection
-        (ARGLIST
+        (arglist
           'relation-intersection))))
-      :arguments (:user-supplied (:label "List of two relations:"
-    :default NIL
+      :arguments (:user-supplied (:label "list of two relations:"
+    :default nil
     :type (:documentation
-     "List of the names of two relations which will take part in the relation intersection operation. The attributes to be projected and a where clause can be specified for each relation using keywords. For instance, (REL1 (PROJECT <attr> WHERE <where-claue>) REL2 (WHERE <where-clause> PROJECT <attr>))." :SEXP))
+     "list of the names of two relations which will take part in the relation intersection operation. the attributes to be projected and a where clause can be specified for each relation using keywords. for instance, (rel1 (project <attr> where <where-claue>) rel2 (where <where-clause> project <attr>))." :sexp))
    ,*ucl-into*
-   (:label "Tuples?"
-    :default NIL
+   (:label "tuples?"
+    :default nil
     :type (:documentation
-     "Specify if the resultant tuples be returned rather than inserted in a relation. The following parameters can be ignored if this is true."
+     "specify if the resultant tuples be returned rather than inserted in a relation. the following parameters can be ignored if this is true."
      :boolean))
    ,*ucl-format*
    ,*ucl-dir*
@@ -2232,329 +2238,329 @@
    ,*ucl-sto*
    ,*ucl-print*
    ,*ucl-unique*
-  :LABEL "Parameters for the set-intersection of two relations")
-      :menus ((command-menu :COLUMN "Operators"))
-      :documentation "Used to form intersection of two compatible relations"
-      :keys ((#\SUPER-O #\SUPER-I)))
-  (SEND *output-window* :append-item
-(FORMAT nil "~S"
-(LIST 'RELATION-INTERSECTION
-      (SETQ keywords (LIST 'into into
+  :label "parameters for the set-intersection of two relations")
+      :menus ((command-menu :column "operators"))
+      :documentation "used to form intersection of two compatible relations"
+      :keys ((#\super-o #\super-i)))
+  (send *output-window* :append-item
+(format nil "~s"
+(list 'relation-intersection
+      (setq keywords (list 'into into
      'from from 'tuples tuples
      'format format 'dir dir 'doc doc
      'key key 'imp imp 'sto sto
      'print print 'unique unique)))))
-  (RELATION-INTERSECTION keywords))
+  (relation-intersection keywords))
 ;**************************************************************************
-;                DEFCOMMAND  FOR AVERAGE     *
+;                defcommand  for average     *
 ;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC average) (relation attribute unique where by tuples
-      &AUX keywords)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'average)
-     (FORMAT NIL "  ~S"
-      (CONS
+(ucl:defcommand (dbms-rc average) (relation attribute unique where by tuples
+      &aux keywords)
+            `(:description ,(string-append (documentation 'average)
+     (format nil "  ~s"
+      (cons
         'average
-        (ARGLIST
+        (arglist
           'average))))
-      :arguments (:user-supplied (:label "Relation name:"
+      :arguments (:user-supplied (:label "relation name:"
     :default *ui-relation*
     :type (:documentation
-     "Name of the relation which contains the attribute to be averaged." :SEXP))
+     "name of the relation which contains the attribute to be averaged." :sexp))
    ,*ucl-count-attr*
    ,*ucl-count-unique*
       ,*ucl-where*
    ,*ucl-by*
    ,*ucl-tuples*
-  :LABEL "Parameters for average:")
-      :menus ((command-menu :COLUMN "Operators"))
-      :documentation "Used to compute the average of the attribute values in a relation."
-      :keys ((#\SUPER-O #\SUPER-A)))
-  (SEND *output-window* :append-item
-(FORMAT nil "~S"
-(LIST 'AVERAGE relation attribute
-      (SETQ keywords (LIST 'unique unique
+  :label "parameters for average:")
+      :menus ((command-menu :column "operators"))
+      :documentation "used to compute the average of the attribute values in a relation."
+      :keys ((#\super-o #\super-a)))
+  (send *output-window* :append-item
+(format nil "~s"
+(list 'average relation attribute
+      (setq keywords (list 'unique unique
      'where where 'by by 'tuples tuples)))))
-  (AVERAGE relation attribute keywords))
+  (average relation attribute keywords))
 ;**************************************************************************
-;                DEFCOMMAND  FOR SUM         *
+;                defcommand  for sum         *
 ;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC sum) (relation attribute unique where by tuples
-  &AUX keywords)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'sum)
-     (FORMAT NIL "  ~S"
-      (CONS
+(ucl:defcommand (dbms-rc sum) (relation attribute unique where by tuples
+  &aux keywords)
+            `(:description ,(string-append (documentation 'sum)
+     (format nil "  ~s"
+      (cons
         'sum
-        (ARGLIST
+        (arglist
           'sum))))
-      :arguments (:user-supplied (:label "Relation name:"
+      :arguments (:user-supplied (:label "relation name:"
     :default *ui-relation*
     :type (:documentation
-     "Name of the relation which contains the attribute to be summed." :SEXP))
+     "name of the relation which contains the attribute to be summed." :sexp))
    ,*ucl-count-attr*
    ,*ucl-count-unique*
    ,*ucl-where*
    ,*ucl-by*
    ,*ucl-tuples*
-  :LABEL "Parameters for sum:")
-      :menus ((command-menu :COLUMN "Operators"))
-      :documentation "Used to compute the sum of the attribute values in a relation."
-      :keys ((#\SUPER-O #\SUPER-S)))
-  (SEND *output-window* :append-item
-(FORMAT nil "~S"
-(LIST 'SUM relation attribute
-      (SETQ keywords (LIST 'unique unique 'by by 'tuples tuples
+  :label "parameters for sum:")
+      :menus ((command-menu :column "operators"))
+      :documentation "used to compute the sum of the attribute values in a relation."
+      :keys ((#\super-o #\super-s)))
+  (send *output-window* :append-item
+(format nil "~s"
+(list 'sum relation attribute
+      (setq keywords (list 'unique unique 'by by 'tuples tuples
      'where where)))))
-  (SUM relation attribute keywords))
+  (sum relation attribute keywords))
 ;**************************************************************************
-;                DEFCOMMAND  FOR SIZE        *
+;                defcommand  for size        *
 ;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC size) (relation unique where by tuples &AUX keywords)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'size)
-     (FORMAT NIL "  ~S"
-      (CONS
+(ucl:defcommand (dbms-rc size) (relation unique where by tuples &aux keywords)
+            `(:description ,(string-append (documentation 'size)
+     (format nil "  ~s"
+      (cons
         'size
-        (ARGLIST
+        (arglist
           'size))))
-      :arguments (:user-supplied (:label "Relation name:"
+      :arguments (:user-supplied (:label "relation name:"
     :default *ui-relation*
     :type (:documentation
-     "Name of the relation whose size is required." :SEXP))
+     "name of the relation whose size is required." :sexp))
    ,*ucl-count-unique*
    ,*ucl-where*
    ,*ucl-by*
    ,*ucl-tuples*
-  :LABEL "Parameters for size:")
-      :menus ((command-menu :COLUMN "Operators"))
-      :documentation "Used to compute the size of the relation."
-      :keys (#\SUPER-HYPER-S))
-  (SEND *output-window* :append-item
-(FORMAT nil "~S"
-(LIST 'SIZE relation
-      (SETQ keywords (LIST 'unique unique 'by by 'tuples tuples
+  :label "parameters for size:")
+      :menus ((command-menu :column "operators"))
+      :documentation "used to compute the size of the relation."
+      :keys (#\super-hyper-s))
+  (send *output-window* :append-item
+(format nil "~s"
+(list 'size relation
+      (setq keywords (list 'unique unique 'by by 'tuples tuples
      'where where)))))
-  (SIZE relation keywords))
+  (size relation keywords))
 ;**************************************************************************
-;                DEFCOMMAND  FOR COUNT-RTMS     *
+;                defcommand  for count-rtms     *
 ;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC count) (relation attribute unique where by tuples
-         &AUX keywords)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'count-rtms)
-     (FORMAT NIL "  ~S"
-      (CONS
+(ucl:defcommand (dbms-rc count) (relation attribute unique where by tuples
+         &aux keywords)
+            `(:description ,(string-append (documentation 'count-rtms)
+     (format nil "  ~s"
+      (cons
         'count-rtms
-        (ARGLIST
+        (arglist
           'count-rtms))))
-      :arguments (:user-supplied (:label "Relation name:"
+      :arguments (:user-supplied (:label "relation name:"
     :default *ui-relation*
     :type (:documentation
-     "Name of the relation which contains the attribute to be used to find the number of tuples." :SEXP))
+     "name of the relation which contains the attribute to be used to find the number of tuples." :sexp))
    ,*ucl-count-attr*
    ,*ucl-count-unique*
    ,*ucl-where*
    ,*ucl-by*
    ,*ucl-tuples*
-  :LABEL "Parameters for count:")
-      :menus ((command-menu :COLUMN "Operators"))
-      :documentation "Used to compute the count of the attribute values in a relation."
-      :keys ((#\SUPER-O #\SUPER-C)))
-  (SEND *output-window* :append-item
-(FORMAT nil "~S"
-(LIST 'COUNT-RTMS relation attribute
-      (SETQ keywords (LIST 'unique unique 'by by 'tuples tuples
+  :label "parameters for count:")
+      :menus ((command-menu :column "operators"))
+      :documentation "used to compute the count of the attribute values in a relation."
+      :keys ((#\super-o #\super-c)))
+  (send *output-window* :append-item
+(format nil "~s"
+(list 'count-rtms relation attribute
+      (setq keywords (list 'unique unique 'by by 'tuples tuples
      'where where)))))
-  (COUNT-RTMS relation attribute keywords))
+  (count-rtms relation attribute keywords))
 ;**************************************************************************
-;                DEFCOMMAND  FOR MAXIMUM     *
+;                defcommand  for maximum     *
 ;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC maximum) (relation attribute where by tuples
-      &AUX keywords)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'maximum)
-     (FORMAT NIL "  ~S"
-      (CONS
+(ucl:defcommand (dbms-rc maximum) (relation attribute where by tuples
+      &aux keywords)
+            `(:description ,(string-append (documentation 'maximum)
+     (format nil "  ~s"
+      (cons
         'maximum
-        (ARGLIST
+        (arglist
           'maximum))))
-      :arguments (:user-supplied (:label "Relation name:"
+      :arguments (:user-supplied (:label "relation name:"
     :default *ui-relation*
     :type (:documentation
-     "Name of the relation which contains the attribute to be maximumd." :SEXP))
+     "name of the relation which contains the attribute to be maximumd." :sexp))
    ,*ucl-count-attr*
    ,*ucl-where*
    ,*ucl-by*
    ,*ucl-tuples*
-  :LABEL "Parameters for maximum:")
-      :menus ((command-menu :COLUMN "Operators"))
-      :documentation "Used to compute the maximum of the attribute values in a relation."
-      :keys ((#\SUPER-O #\SUPER-M)))
-  (SEND *output-window* :append-item
-(FORMAT nil "~S"
-(LIST 'MAXIMUM relation attribute
-      (SETQ keywords (LIST 'where where 'by by 'tuples tuples)))))
-  (MAXIMUM relation attribute keywords))
+  :label "parameters for maximum:")
+      :menus ((command-menu :column "operators"))
+      :documentation "used to compute the maximum of the attribute values in a relation."
+      :keys ((#\super-o #\super-m)))
+  (send *output-window* :append-item
+(format nil "~s"
+(list 'maximum relation attribute
+      (setq keywords (list 'where where 'by by 'tuples tuples)))))
+  (maximum relation attribute keywords))
 ;**************************************************************************
-;                DEFCOMMAND  FOR MINIMUM     *
+;                defcommand  for minimum     *
 ;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC minimum) (relation attribute where by tuples
-      &AUX keywords)
-            `(:description ,(STRING-APPEND (DOCUMENTATION 'minimum)
-     (FORMAT NIL "  ~S"
-      (CONS
+(ucl:defcommand (dbms-rc minimum) (relation attribute where by tuples
+      &aux keywords)
+            `(:description ,(string-append (documentation 'minimum)
+     (format nil "  ~s"
+      (cons
         'minimum
-        (ARGLIST
+        (arglist
           'minimum))))
-      :arguments (:user-supplied (:label "Relation name:"
+      :arguments (:user-supplied (:label "relation name:"
     :default *ui-relation*
     :type (:documentation
-     "Name of the relation which contains the attribute to be minimumd." :SEXP))
+     "name of the relation which contains the attribute to be minimumd." :sexp))
    ,*ucl-count-attr*
    ,*ucl-where*
    ,*ucl-by*
    ,*ucl-tuples*
-  :LABEL "Parameters for minimum:")
-      :menus ((command-menu :COLUMN "Operators"))
-      :documentation "Used to compute the minimum of the attribute values in a relation."
-      :keys (#\SUPER-HYPER-M))
-  (SEND *output-window* :append-item
-(FORMAT nil "~S"
-(LIST 'MINIMUM relation attribute
-      (SETQ keywords (LIST 'where where 'by by 'tuples tuples)))))
-  (MINIMUM relation attribute keywords))
+  :label "parameters for minimum:")
+      :menus ((command-menu :column "operators"))
+      :documentation "used to compute the minimum of the attribute values in a relation."
+      :keys (#\super-hyper-m))
+  (send *output-window* :append-item
+(format nil "~s"
+(list 'minimum relation attribute
+      (setq keywords (list 'where where 'by by 'tuples tuples)))))
+  (minimum relation attribute keywords))
 ;**************************************************************************
-;                DEFCOMMAND  FOR HELP DBMS OBJECT                                  *
+;                defcommand  for help dbms object                                  *
 ;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC inspect-dbms-object) (object)
-            `(:description "Information on any database object"
-      :arguments (:user-supplied (:label "Database Object:"
+(ucl:defcommand (dbms-rc inspect-dbms-object) (object)
+            `(:description "information on any database object"
+      :arguments (:user-supplied (:label "database object:"
     :default *ui-object*
     :type (:documentation
-     "Specify a database object (COMMAND / RELATION / ATTRIBUTE)."
+     "specify a database object (command / relation / attribute)."
      :sexp))
-  :LABEL "Help on the database object ->")
+  :label "help on the database object ->")
       :menus help
-      :documentation "Used to inspect any database object."
-      :keys (#\CONTROL-HELP))
-  (SEND *output-window* :append-item
-(FORMAT nil "(INSPECT-DBMS-OBJECT '~S)" object))
-  (HELP-OBJECT object))
+      :documentation "used to inspect any database object."
+      :keys (#\control-help))
+  (send *output-window* :append-item
+(format nil "(inspect-dbms-object '~s)" object))
+  (help-object object))
 ;**************************************************************************
-;                DEFCOMMAND  FOR REFRESH OUTPUT WINDOW                             *
+;                defcommand  for refresh output window                             *
 ;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC clear-output-window) ()
-    `(:description "Clear the entire output window"
+(ucl:defcommand (dbms-rc clear-output-window) ()
+    `(:description "clear the entire output window"
       :menus display
-      :keys (#\CLEAR-SCREEN))
-  (SEND *output-window* :set-items nil)
-  (FUNCALL *OUTPUT-WINDOW* :SCROLL-TO
-   (- 2 (W:SHEET-NUMBER-OF-INSIDE-LINES *OUTPUT-WINDOW*))
-   :RELATIVE))
+      :keys (#\clear-screen))
+  (send *output-window* :set-items nil)
+  (funcall *output-window* :scroll-to
+   (- 2 (w:sheet-number-of-inside-lines *output-window*))
+   :relative))
 ;**************************************************************************
-;                DEFCOMMAND  FOR SCROLL DOWN *
+;                defcommand  for scroll down *
 ;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC scroll-forward) ()
+(ucl:defcommand (dbms-rc scroll-forward) ()
    `(:description "scrolling forward in the output-window"
      :menus display
-     :keys (#\CONTROL-V))
-  (FUNCALL *OUTPUT-WINDOW* :SCROLL-TO
-   (- (W:SHEET-NUMBER-OF-INSIDE-LINES *OUTPUT-WINDOW*) 2)
-   :RELATIVE))
+     :keys (#\control-v))
+  (funcall *output-window* :scroll-to
+   (- (w:sheet-number-of-inside-lines *output-window*) 2)
+   :relative))
 ;**************************************************************************
-;                DEFCOMMAND  FOR SCROLL UP   *
+;                defcommand  for scroll up   *
 ;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC scroll-backward) ()
+(ucl:defcommand (dbms-rc scroll-backward) ()
    `(:description "scrolling backward in the output-window"
      :menus display
-     :keys (#\META-V))
-  (FUNCALL *OUTPUT-WINDOW* :SCROLL-TO
-   (- 2 (W:SHEET-NUMBER-OF-INSIDE-LINES *OUTPUT-WINDOW*))
-   :RELATIVE))
+     :keys (#\meta-v))
+  (funcall *output-window* :scroll-to
+   (- 2 (w:sheet-number-of-inside-lines *output-window*))
+   :relative))
 ;**************************************************************************
-;                DEFCOMMAND  FOR SCROLL TO THE TOP                                 *
+;                defcommand  for scroll to the top                                 *
 ;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC scroll-to-top) ()
+(ucl:defcommand (dbms-rc scroll-to-top) ()
    `(:description "scrolling to the top in the output-window"
      :menus display
-     :keys (#\META-<))
-  (SEND *OUTPUT-WINDOW* :put-item-in-window
-(SEND *OUTPUT-WINDOW* :item-of-number 0)))
+     :keys (#\meta-<))
+  (send *output-window* :put-item-in-window
+(send *output-window* :item-of-number 0)))
 ;**************************************************************************
-;                DEFCOMMAND  FOR SCROLL TO THE BOTTOM                              *
+;                defcommand  for scroll to the bottom                              *
 ;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC scroll-to-bottom) ()
+(ucl:defcommand (dbms-rc scroll-to-bottom) ()
    `(:description "scrolling to the bottom in the output-window"
      :menus display
-     :keys (#\META->))
-  (SEND *OUTPUT-WINDOW* :put-last-item-in-window))
+     :keys (#\meta->))
+  (send *output-window* :put-last-item-in-window))
 ;**************************************************************************
-;                DEFCOMMAND  FOR SCROLL TO A RELATION                              *
+;                defcommand  for scroll to a relation                              *
 ;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC scroll-to-a-relation) (relation &aux index)
-     `(:description "Scroll to a particular relation"
-       :arguments (:user-supplied (:label "Relation Name:"
+(ucl:defcommand (dbms-rc scroll-to-a-relation) (relation &aux index)
+     `(:description "scroll to a particular relation"
+       :arguments (:user-supplied (:label "relation name:"
     :default *ui-relation*
     :type (:documentation
-     "Name of the relation to scroll to:"
+     "name of the relation to scroll to:"
      :sexp))
-   :label "Scroll to the relation ==>")
+   :label "scroll to the relation ==>")
        :menus display
-       :keys (#\CONTROL-R))
-  (IF (AND (SETQ index (GETP relation :index))
-   (< index (LENGTH (SEND *output-window* :items))))
-      (SEND *output-window* :put-item-in-window
-    (SEND *output-window* :item-of-number index))
-    (FORMAT *typeout-window* "~%The relation ~S is not in the output-window"
+       :keys (#\control-r))
+  (if (and (setq index (getp relation :index))
+   (< index (length (send *output-window* :items))))
+      (send *output-window* :put-item-in-window
+    (send *output-window* :item-of-number index))
+    (format *typeout-window* "~%the relation ~s is not in the output-window"
     relation)))
 ;**************************************************************************
-;                DEFCOMMAND  FOR SEND OUTPUT TO A FILE                             *
+;                defcommand  for send output to a file                             *
 ;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC send-output-to-file) (file &AUX pathname)
-     `(:description "Send the contents of the output window to a file."
-       :arguments (:user-supplied (:label "File name:"
+(ucl:defcommand (dbms-rc send-output-to-file) (file &aux pathname)
+     `(:description "send the contents of the output window to a file."
+       :arguments (:user-supplied (:label "file name:"
        :default *ui-file*
     :type (:documentation
-     "Name of the file to send the output to:" :sexp))
-   :label "Send the output window contents to:")
+     "name of the file to send the output to:" :sexp))
+   :label "send the output window contents to:")
        :menus display
-       :keys (#\HYPER-F))
-  (UNWIND-PROTECT
-      (SETQ pathname (CAR (ERRSET
-  (OPEN (SETQ pathname file) :characters t
+       :keys (#\hyper-f))
+  (unwind-protect
+      (setq pathname (car (errset
+  (open (setq pathname file) :characters t
                      :direction :output        ;mrr 04.09.87
                      :if-does-not-exist :create) nil)))
-    (IF (null pathname)
-(FORMAT *typeout-window* "~S is a bad file." file)
-      (MAPCAR (FUNCTION (LAMBDA (line &AUX item)
-       (COND ((OR (STRINGP line)
-  (NUMBERP line)
-  (SYMBOLP line))
-      (PRINC line pathname))
-     ((LISTP line)
-      (DOLIST (element line)
-(COND ((OR (STRINGP element)
-    (NUMBERP element)
-    (SYMBOLP element))
-       (PRINC element pathname))
-      ((NULL (LISTP element)) nil)
-      ((NULL (EQUAL (CAR element) :item1))
-       (PRINC (CAR element) pathname))
-      (T (SETQ item (CADR element))
-  (PRINC
-    (IF (LISTP item)
-        (CAR item)
+    (if (null pathname)
+(format *typeout-window* "~s is a bad file." file)
+      (mapcar (function (lambda (line &aux item)
+       (cond ((or (stringp line)
+  (numberp line)
+  (symbolp line))
+      (princ line pathname))
+     ((listp line)
+      (dolist (element line)
+(cond ((or (stringp element)
+    (numberp element)
+    (symbolp element))
+       (princ element pathname))
+      ((null (listp element)) nil)
+      ((null (equal (car element) :item1))
+       (princ (car element) pathname))
+      (t (setq item (cadr element))
+  (princ
+    (if (listp item)
+        (car item)
       item)
     pathname)
   )))))
-       (TERPRI pathname)))
-      (LISTARRAY (SEND *output-window* :items)))))
-  (IF pathname
-      (CLOSE pathname)))
+       (terpri pathname)))
+      (listarray (send *output-window* :items)))))
+  (if pathname
+      (close pathname)))
 ;**************************************************************************
-;                DEFCOMMAND  FOR INTRODUCTION                                      *
+;                defcommand  for introduction                                      *
 ;**************************************************************************
-(UCL:DEFCOMMAND (DBMS-RC introduction) ()
-    `(:description "Introduction to this interface."
+(ucl:defcommand (dbms-rc introduction) ()
+    `(:description "introduction to this interface."
       :menus help
-      :keys (#\META-HELP))
-  (HELP))
+      :keys (#\meta-help))
+  (help))
 
 ;**************************************************************************
 ;                DEFCOMMAND  FOR SUB-MENU DBMS HELP                                *
