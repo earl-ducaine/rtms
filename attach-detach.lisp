@@ -425,96 +425,104 @@
 	   (return-from validate-attach-struct-hash card)))))
 
 (defun detach-relation-save (relation-name pathname)
-  (dump-forms-to-file pathname `((setf *attach-detach-data* ',(getp relation-name 'entry-point)))))
+  (dump-forms-to-file
+   pathname
+   `((setf *attach-detach-data* ',(getp relation-name 'entry-point)))))
 
 (defun detach-relation (relation-name &rest keyword-list
 			&key &optional disk memory pathname
-			&allow-other-keys
-			&aux dir end-index imp pathname1 sto mem)
+			       &allow-other-keys)
   "Detach data in an existing relation into a variable or onto the disk.
-
-   RELATION-NAME - The name of the relation from which the data is to be detached.
-   DISK          - If T, RTMS stores the data in the file specified in the PATHNAME.
-   MEMORY        - If set to T, the detached data is stored in the variable rtms:*attach-detach-data*.
-                   If any variable name is supplied, the data will be stored in it.
-   PATHNAME      - Name of the file in which the detached data is to be saved."
-  disk memory pathname
-  (block detach-relation
-    (if *parameter-checking*
-	(if (or (not (active-database relation-name))
-		(not (setf relation-name (validate-name relation-name))))
-	    (return-from detach-relation nil)
-	    (setf relation-name (string-upcase relation-name)))
-	(setf relation-name (string-upcase relation-name)))
-    (setf keyword-list  (de-nest-keyword-list keyword-list))
-    ;;
-    ;;  Must deteremine if the relation exists. May not detach a view
-    ;;
-    (cond ((not (setf dir (car (qtrieve 'system-relation *system-relation-attributes*
-					'(save-directory implementation-type storage-structure)
-					*system-relation-key*
-					`(string-equal relation-name ,relation-name)))))
-	   (if *provide-error-messages*
-	       (format *standard-output* "~%ERROR - ~S is not a relation in database ~s."
-		       relation-name *active-db*))
-	   (return-from detach-relation nil)))
-    (setf imp (nth 1 dir)
-	  sto (nth 2 dir)
-	  dir (nth 0 dir))
-    (if *parameter-checking*
-	(setf keyword-list (get-keyword-value-prereq '(path disk mem) keyword-list)))
-    ;;
-    ;;  Form the pathname where the file will be saved
-    ;;
-    (setf mem (car (get-keyword-value '(mem) keyword-list)))
-    (setf pathname1 (car (get-keyword-value '(path) keyword-list)))
-    (if (and (not mem) (not pathname1))
-	(setf mem '*attach-detach-data*))
-    (setf keyword-list (append '(disk) (get-keyword-value '(disk) keyword-list)))
-    ;;
-    ;;  Determine if the specified directory exists
-    ;;
-    (if pathname1
-	(progn
-	  (cond ((setf end-index (search ";" pathname1))
-		 (setf dir (subseq pathname1 0 (+ end-index 1))))
-		(t
-		 (setf pathname1 (concatenate 'string dir pathname1))))
-	  (cond ((not (search "pages used in" (third (caar (errset (fs:directory-list pathname1) nil)))))
-		 (if *provide-error-messages*
-		     (format *standard-output* "~%ERROR - Directory ~s does not exist" dir))
-		 (return-from detach-relation nil)))))
-    ;;
-    ;;  Everything looks alright, get the data, write it out and then destroy the relation
-    ;;
-    (if *provide-status-messages*
-	(format *standard-output* "~%Relation ~s will now be detached from the ~s database"
-		relation-name *active-db*))
-    (cond ((relation-emptyp relation-name imp sto)
-	   (cond ((destroy-relation relation-name keyword-list)
-		  (if *provide-status-messages*
-		      (format *standard-output* "~%The relation ~s is empty, nothing to output"
-			      relation-name))
-		  (return-from detach-relation relation-name))
-		 (t
-		  (return-from detach-relation nil))))
-	  (t
-	   (if (or (not mem) (equal mem t))
-	       (setf *attach-detach-data* (getp relation-name 'entry-point))
-	       (set mem (getp relation-name 'entry-point)))
-	   (if pathname1
-	       (detach-relation-save relation-name pathname1))
-	   (cond ((destroy-relation relation-name keyword-list)
-		  (if *provide-status-messages*
-		      (format *standard-output* "~%Relation ~s has been sucessfully detached"
-			      relation-name))
-		  (return-from detach-relation relation-name))
-		 (t
-		  (return-from detach-relation nil)))))))
+   relation-name - The name of the relation from which the data is to
+                   be detached.
+   disk          - If T, RTMS stores the data in the file specified in the
+                   pathname.
+   memory        - If set to T, the detached data is stored in the variable
+                   rtms:*attach-detach-data*. If any variable name is
+                   supplied, the data will be stored in it.
+   pathname      - Name of the file in which the detached data is to be
+                   saved."
+  (declare (ignore disk memory pathname))
+  (let (dir end-index imp pathname1 sto mem)
+    (block detach-relation
+      (if *parameter-checking*
+	  (if (or (not (active-database relation-name))
+		  (not (setf relation-name (validate-name relation-name))))
+	      (return-from detach-relation nil)
+	      (setf relation-name (string-upcase relation-name)))
+	  (setf relation-name (string-upcase relation-name)))
+      (setf keyword-list  (de-nest-keyword-list keyword-list))
+      ;; Must deteremine if the relation exists. May not detach a view
+      (cond
+	((not (setf dir
+		    (car (qtrieve 'system-relation *system-relation-attributes*
+				  '(save-directory implementation-type
+				    storage-structure)
+				  *system-relation-key*
+				  `(string-equal relation-name
+						 ,relation-name)))))
+	 (when *provide-error-messages*
+	   (format *standard-output*
+		   "~%ERROR - ~S is not a relation in database ~s."
+		   relation-name *active-db*))
+	 (return-from detach-relation nil)))
+      (setf imp (nth 1 dir)
+	    sto (nth 2 dir)
+	    dir (nth 0 dir))
+      (if *parameter-checking*
+	  (setf keyword-list
+		(get-keyword-value-prereq '(path disk mem) keyword-list)))
+      ;;  Form the pathname where the file will be saved
+      (setf mem (car (get-keyword-value '(mem) keyword-list)))
+      (setf pathname1 (car (get-keyword-value '(path) keyword-list)))
+      (if (and (not mem) (not pathname1))
+	  (setf mem '*attach-detach-data*))
+      (setf keyword-list (append '(disk)
+				 (get-keyword-value '(disk) keyword-list)))
+      ;;  Determine if the specified directory exists
+      (when pathname1
+	(cond ((setf end-index (search ";" pathname1))
+	       (setf dir (subseq pathname1 0 (+ end-index 1))))
+	      (t
+	       (setf pathname1 (concatenate 'string dir pathname1))))
+	(cond ((not (search "pages used in" (third (caar (errset (fs:directory-list pathname1) nil)))))
+	       (if *provide-error-messages*
+		   (format *standard-output* "~%ERROR - Directory ~s does not exist" dir))
+	       (return-from detach-relation nil))))
+      ;; Everything looks alright, get the data, write it out and then
+      ;; destroy the relation
+      (if *provide-status-messages*
+	  (format *standard-output*
+		  "~%Relation ~s will now be detached from the ~s database"
+		  relation-name *active-db*))
+      (cond ((relation-emptyp relation-name imp sto)
+	     (cond ((destroy-relation relation-name keyword-list)
+		    (if *provide-status-messages*
+			(format *standard-output*
+				"~%The relation ~s is empty, nothing to output"
+				relation-name))
+		    (return-from detach-relation relation-name))
+		   (t
+		    (return-from detach-relation nil))))
+	    (t
+	     (if (or (not mem) (equal mem t))
+		 (setf *attach-detach-data* (getp relation-name 'entry-point))
+		 (set mem (getp relation-name 'entry-point)))
+	     (if pathname1
+		 (detach-relation-save relation-name pathname1))
+	     (cond ((destroy-relation relation-name keyword-list)
+		    (if *provide-status-messages*
+			(format *standard-output*
+				"~%Relation ~s has been sucessfully detached"
+				relation-name))
+		    (return-from detach-relation relation-name))
+		   (t
+		    (return-from detach-relation nil))))))))
 
 (defun relation-emptyp (relation-name implementation-type storage-structure)
-  implementation-type
-  (funcall (find-symbol (concatenate 'string "RELATION-" storage-structure "-EMPTYP") *pkg-string*)
+  (declare (ignore implementation-type))
+  (funcall (find-symbol (str "RELATION-" storage-structure "-EMPTYP")
+			*pkg-string*)
 	   relation-name))
 
 (defun relation-hash-emptyp (relation-name)

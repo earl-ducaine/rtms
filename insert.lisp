@@ -413,69 +413,34 @@
 	    %tuple))
 	  tuples key))
 
-(defun insert-struct-heap (relation-name attr-list tuples key index-name
-			   &aux relation-macro struct-tuples
-			     (string-relation-name (string relation-name)))
-  key attr-list
-  (setf relation-macro (read-from-string (concatenate 'string *pkg-name* "MAKE-"
-						      string-relation-name)))
-  (setf attr-list
-	(mapcar #'(lambda (attr)
-		    (read-from-string (concatenate 'string ":" string-relation-name attr)))
-		attr-list))
-  (setf struct-tuples (mapcar (function (lambda (tuple &aux attr-val)
-				(do ((tuple tuple (cdr tuple))
-				     (attr-list attr-list (cdr attr-list)))
-				    ((null tuple) attr-val)
-				  (push `(quote ,(car tuple)) attr-val)
-				  (push (car attr-list) attr-val))
-				(eval `(,relation-macro ,@attr-val))))
-			      tuples))
-  (let ((relation-tuples (getp index-name 'entry-point)) (tuples-length (length struct-tuples)))
-    ;; The idea here is that append copies all arguments except the last, therefore for speed reasons the small list should
-    ;; be the first argument to append. Length takes too long so a faster determination of the probable shortest list must be made.
-    (if (nth tuples-length relation-tuples)
-	(putp index-name (append struct-tuples relation-tuples) 'entry-point)
-	(putp index-name (append relation-tuples struct-tuples) 'entry-point)))
-  struct-tuples)
-
-
-;;; fragments
-
-
-;; E") *system-index-key*
-;;        `(and (string-equal index-name ,(string-upcase new-index-name))
-;;       (string-equal relation-name ,(string-upcase relation-name)))
-;;        nil 'system-index))
-;; (if *provide-error-messages*
-;;     (format *standard-output*
-;;     "~%ERROR - An index with the name of ~s has already been defined on the relation ~s"
-;;     new-index-name relation-name))
-;; (return-from modify-index nil)))))
-;;   ;;
-;;   ;;  Determine if the requested storage structure is defined in the current database
-;;   ;;
-;;   (cond ((null index-type)
-;;  (setf index-type (first index-info)))
-;; (t
-;;  (setf index-type (string-upcase index-type))
-
-
-
-;; XR-BQ-LISTB DOCUMENTATION Insert a list of tuples or data from a file.
-
-;;    RELATION-NAME   - Name of the relation into which the data is to be inserted.
-;;    TUPLES     - List of tuples to be inserted. Tuples are expected to be in the list-of-values format.
-;;    ATTRIBUTES - If the values in the tuples do not correspond to the attribute-list specified during
-;;                 relation-defintion, specify a list of attributes to determine the order.
-;;    PATHNAME   - If the data is in a file, specify the name of the file.'(lambda (attr)
-;;   (if (not (or (member attr actual-p-l :test 'string-equal)
-;;         (equal (length actual-p-l) (length sub-tuple))))
-;;       (setf actual-p-l (append actual-p-l (list attr)))))
-;;      attribute-list))
-;;   (if (and *parameter-checking* (> (length actual-p-l)(length sub-tuple)))
-;;       (progn
-;;  (setf actual-p-l (firstn (length sub-tuple) actual-p-l))
-;;  (if *provide-warning-messages*
-;;      (format *standard-output*
-;;       "~%WARNING - The tuple ~S is smaller in length than
+(defun insert-struct-heap (relation-name attr-list tuples key index-name)
+  (declare (ignore key))
+  (let ((string-relation-name (string relation-name))
+	(relation-macro (read-from-string
+			 (str *pkg-name* "MAKE-" string-relation-name)))
+	struct-tuples)
+    (setf attr-list
+	  (mapcar #'(lambda (attr)
+		      (read-from-string (str ":" string-relation-name attr)))
+		  attr-list))
+    (setf struct-tuples
+	  (mapcar (lambda (tuple)
+		    (let (attr-val)
+		      (do ((tuple tuple (cdr tuple))
+			   (attr-list attr-list (cdr attr-list)))
+			  ((null tuple) attr-val)
+			(push `(quote ,(car tuple)) attr-val)
+			(push (car attr-list) attr-val))
+		      (eval `(,relation-macro ,@attr-val))))
+		  tuples))
+    (let ((relation-tuples (getp index-name 'entry-point))
+	  (tuples-length (length struct-tuples)))
+      ;; The idea here is that append copies all arguments except the
+      ;; last, therefore for speed reasons the small list should be
+      ;; the first argument to append. Length takes too long so a
+      ;; faster determination of the probable shortest list must be
+      ;; made.
+      (if (nth tuples-length relation-tuples)
+	  (putp index-name (append struct-tuples relation-tuples) 'entry-point)
+	  (putp index-name (append relation-tuples struct-tuples) 'entry-point)))
+    struct-tuples))
